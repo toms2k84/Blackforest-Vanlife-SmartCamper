@@ -1,0 +1,2027 @@
+# Camper-Panel: Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, GT911, WLAN über ESP32-C6)
+# Hardware-Teil nach der erprobten Community-Konfiguration (HA-Forum, Thread 945864, Beitrag #26/#33).
+# Die Logik bleibt in HA/Node-RED; das Panel zeigt nur an und löst HA-Aktionen aus.
+
+substitutions:
+  name: camper-panel
+  friendly_name: Camper-Panel
+  # Farben
+  c_bg: "0x111418"
+  c_card: "0x1E232A"
+  c_card_on: "0x2B4A6F"
+  c_accent: "0x3B8EE8"
+  c_text: "0xF2F4F7"
+  c_dim: "0x9AA4B2"
+  c_green: "0x22C55E"
+  c_orange: "0xF59E0B"
+  c_red: "0xEF4444"
+  glyphs: " !#%&'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyzÄÖÜäöüß°–·…"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  variant: esp32p4
+  flash_size: 32MB
+  cpu_frequency: 360MHz
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+    sdkconfig_options:
+      CONFIG_SPIRAM_SPEED_200M: y
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "60"
+
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+preferences:
+  flash_write_interval: 5min
+
+esp_ldo:
+  - voltage: 2.5V
+    channel: 3
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: "__API_KEY__"
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ---------------------------------------------------------------- Hardware
+
+i2c:
+  - id: bus_a
+    sda: GPIO07
+    scl: GPIO08
+    frequency: 400kHz
+
+touchscreen:
+  - platform: gt911
+    id: touch
+    i2c_id: bus_a
+    reset_pin: GPIO23
+    update_interval: 50ms
+    # Bild ist per LVGL um 180° gedreht, der Touch muss dazu gespiegelt werden
+    transform:
+      swap_xy: false
+      mirror_x: true
+      mirror_y: true
+    on_release:
+      # Antippen weckt das Display; der erste Tipp nach dem Aufwachen löst nichts aus.
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO32
+    inverted: true
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: Display-Helligkeit
+    id: backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+display:
+  - platform: mipi_dsi
+    id: main_display
+    model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
+    reset_pin:
+      number: 33
+    update_interval: never
+    auto_clear_enabled: false
+    dimensions:
+      width: 1024
+      height: 600
+
+# ---------------------------------------------------------------- Schriften (mit Umlauten und °)
+
+font:
+  - file: "gfonts://Roboto"
+    id: f_s
+    size: 20
+    glyphs: ${glyphs}
+    # 8 bit: große Glyphen zeichnet der P4 per PPA, der kann keine 1-Bit-Masken (Text wurde fast unsichtbar)
+    bpp: 8
+  - file: "gfonts://Roboto"
+    id: f_xs
+    size: 16
+    glyphs: ${glyphs}
+    # 8 bit: große Glyphen zeichnet der P4 per PPA, der kann keine 1-Bit-Masken (Text wurde fast unsichtbar)
+    bpp: 8
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 500
+    id: f_m
+    size: 26
+    glyphs: ${glyphs}
+    # 8 bit: große Glyphen zeichnet der P4 per PPA, der kann keine 1-Bit-Masken (Text wurde fast unsichtbar)
+    bpp: 8
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 500
+    id: f_l
+    size: 38
+    glyphs: ${glyphs}
+    # 8 bit: große Glyphen zeichnet der P4 per PPA, der kann keine 1-Bit-Masken (Text wurde fast unsichtbar)
+    bpp: 8
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 500
+    id: f_xl
+    size: 56
+    glyphs: ${glyphs}
+    # 8 bit: große Glyphen zeichnet der P4 per PPA, der kann keine 1-Bit-Masken (Text wurde fast unsichtbar)
+    bpp: 8
+
+
+
+  - file:
+      type: web
+      url: https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf
+    id: f_icon
+    size: 36
+    bpp: 8
+    glyphs: ["\U000F0335", "\U000F12CE", "\U000F09A0", "\U000F1356", "\U000F1B88", "\U000F1054", "\U000F001B", "\U000F0084", "\U000F058C", "\U000F058F", "\U000F1066", "\U000F0F54", "\U000F0405", "\U000F0A72", "\U000F0D9B", "\U000F06A5", "\U000F01FA", "\U000F0238", "\U000F0F92", "\U000F056E", "\U000F140B", "\U000F05E0", "\U000F0028", "\U000F050F", "\U000F1C3B"]
+  - file:
+      type: web
+      url: https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf
+    id: f_icon_s
+    size: 22
+    bpp: 8
+    glyphs: ["\U000F0335", "\U000F12CE", "\U000F09A0", "\U000F1356", "\U000F1B88", "\U000F1054", "\U000F001B", "\U000F0084", "\U000F058C", "\U000F058F", "\U000F1066", "\U000F0F54", "\U000F0405", "\U000F0A72", "\U000F0D9B", "\U000F06A5", "\U000F01FA", "\U000F0238", "\U000F0F92", "\U000F056E", "\U000F140B", "\U000F05E0", "\U000F0028", "\U000F050F", "\U000F1C3B"]
+
+sensor:
+  - platform: homeassistant
+    id: ha_ac_target
+    entity_id: climate.dometicklima_dometic_freshjet
+    attribute: temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ac_soll
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f °C", x);'
+  - platform: homeassistant
+    id: ha_ac_current
+    entity_id: climate.dometicklima_dometic_freshjet
+    attribute: current_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ac_temp
+          text: !lambda 'return isnan(x) ? std::string("") : str_sprintf("Raum %.0f °C", x);'
+  - platform: homeassistant
+    id: ha_soc
+    entity_id: sensor.smartshunt_xxxx_batterie
+    on_value:
+      - lvgl.label.update:
+          id: lbl_soc_home
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.label.update:
+          id: lbl_soc_energy
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.bar.update:
+          id: bar_soc
+          value: !lambda 'return isnan(x) ? 0 : (int) x;'
+      - lvgl.bar.update:
+          id: bar_soc_home
+          value: !lambda 'return isnan(x) ? 0 : (int) x;'
+      - script.execute: update_status
+  - platform: homeassistant
+    id: ha_batt_a
+    entity_id: sensor.smartshunt_xxxx_stromstarke
+    on_value:
+      - script.execute: update_battery_detail
+  - platform: homeassistant
+    id: ha_batt_v
+    entity_id: sensor.smartshunt_xxxx_spannung
+    on_value:
+      - script.execute: update_battery_detail
+  - platform: homeassistant
+    id: ha_pv_dach
+    entity_id: sensor.camper_solardach_pv_leistung
+    on_value:
+      - lvgl.label.update:
+          id: lbl_pv_dach
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f W", x);'
+  - platform: homeassistant
+    id: ha_pv_tasche
+    entity_id: sensor.camper_solartasche_pv_leistung
+    on_value:
+      - lvgl.label.update:
+          id: lbl_pv_tasche
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f W", x);'
+  - platform: homeassistant
+    id: ha_ip22_a
+    entity_id: sensor.camper_bsc_ip22_12_30_stromstarke_ausgangsphase_1
+    on_value:
+      - lvgl.label.update:
+          id: lbl_lader_detail
+          text: !lambda 'return isnan(x) ? std::string("keine Daten") : str_sprintf("lädt mit %.1f A", x);'
+  - platform: homeassistant
+    id: ha_ps_soc
+    entity_id: sensor.camper_af_p280_fossibot_xxxx_state_of_charge
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ps_soc
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+  - platform: homeassistant
+    id: ha_ps_in
+    entity_id: sensor.camper_af_p280_fossibot_xxxx_total_input
+    on_value:
+      - script.execute: update_powerstation
+  - platform: homeassistant
+    id: ha_ps_out
+    entity_id: sensor.camper_af_p280_fossibot_xxxx_total_output
+    on_value:
+      - script.execute: update_powerstation
+
+  - platform: homeassistant
+    id: ha_fw
+    entity_id: sensor.vanpi_wasser_frischwasser
+    on_value:
+      - lvgl.label.update:
+          id: lbl_fw_home
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.label.update:
+          id: lbl_fw
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.bar.update:
+          id: bar_fw
+          value: !lambda 'return isnan(x) ? 0 : (int) x;'
+  - platform: homeassistant
+    id: ha_gw_mm
+    entity_id: sensor.pro_check_h2o_xxxx_tank_level
+    # Mopeka misst die Füllhöhe in mm; 180 mm = voll
+    filters:
+      - lambda: 'return x / 180.0 * 100.0;'
+    on_value:
+      - lvgl.label.update:
+          id: lbl_gw_home
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.label.update:
+          id: lbl_gw
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f %%", x);'
+      - lvgl.bar.update:
+          id: bar_gw
+          value: !lambda 'return isnan(x) ? 0 : (int) std::min(100.0f, x);'
+  - platform: homeassistant
+    id: ha_t_tank
+    entity_id: sensor.camper_wassertank_temperatur
+    on_value:
+      - script.execute: update_water_temps
+      - script.execute: update_status
+  - platform: homeassistant
+    id: ha_t_pumpe
+    entity_id: sensor.camper_pumpe_temperatur
+    on_value:
+      - script.execute: update_water_temps
+      - script.execute: update_status
+  - platform: homeassistant
+    id: ha_t_grau
+    entity_id: sensor.pro_check_h2o_xxxx_temperature
+    on_value:
+      - script.execute: update_water_temps
+
+  - platform: homeassistant
+    id: ha_t_innen
+    entity_id: sensor.timmerflotte_temp_hmd_sensor_temperatur
+    on_value:
+      - script.execute: update_climate
+  - platform: homeassistant
+    id: ha_rh_innen
+    entity_id: sensor.timmerflotte_temp_hmd_sensor_luftfeuchtigkeit
+    on_value:
+      - script.execute: update_climate
+  - platform: homeassistant
+    id: ha_taupunkt
+    entity_id: sensor.taupunkt_innen
+    on_value:
+      - script.execute: update_climate
+  - platform: homeassistant
+    id: ha_kond
+    entity_id: sensor.kondensationsreserve
+    on_value:
+      - script.execute: update_status
+  - platform: homeassistant
+    id: ha_t_sitz
+    entity_id: sensor.vanpi_temperatur_sitzecke
+    on_value:
+      - script.execute: update_climate
+  - platform: homeassistant
+    id: ha_t_aussen
+    entity_id: sensor.camper_aussentemperatur_temperatur
+    on_value:
+      - script.execute: update_climate
+      - script.execute: update_status
+
+  - platform: homeassistant
+    id: ha_webasto_temp
+    entity_id: sensor.webasto_webasto_temperatur
+    on_value:
+      - lvgl.label.update:
+          id: lbl_webasto_temp
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("Raum %.0f °C", x);'
+  - platform: homeassistant
+    id: ha_webasto_soll
+    entity_id: number.webasto_solltemperatur
+    on_value:
+      - lambda: 'if (!isnan(x)) id(wb_soll) = (int) x;'
+      - lvgl.label.update:
+          id: lbl_webasto_soll
+          text: !lambda 'return isnan(x) ? std::string("–") : str_sprintf("%.0f °C", x);'
+  - platform: homeassistant
+    id: ha_boiler_temp
+    entity_id: sensor.pekaway_smart_boil_current_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_boiler_temp
+          text: !lambda 'return isnan(x) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%.1f °C", x));'
+  - platform: homeassistant
+    id: ha_boiler_soll
+    entity_id: number.pekaway_smart_boil_target_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_boiler_soll
+          text: !lambda 'return isnan(x) ? std::string("Soll –") : str_sprintf("Soll %.0f °C", x);'
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_druckstufe
+    entity_id: select.pumpen_bridge_pumpe_druckstufe
+    on_value:
+      - lambda: |-
+          lv_obj_t *k[6] = {id(btn_dsh1), id(btn_dsh2), id(btn_dsh3), id(btn_dsw1), id(btn_dsw2), id(btn_dsw3)};
+          for (int i = 0; i < 6; i++) {
+            bool an = x == to_string(i % 3 + 1);
+            if (an) lv_obj_add_state(k[i], LV_STATE_CHECKED); else lv_obj_clear_state(k[i], LV_STATE_CHECKED);
+          }
+  - platform: homeassistant
+    id: ha_ac_state
+    entity_id: climate.dometicklima_dometic_freshjet
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ac_state
+          text: !lambda |-
+            if (x == "off") return std::string("Aus");
+            if (x == "cool") return std::string("Kühlen");
+            if (x == "heat") return std::string("Heizen");
+            if (x == "fan_only") return std::string("Lüften");
+            if (x == "heat_cool") return std::string("Auto");
+            if (x == "dry") return std::string("Entfeuchten");
+            if (x == "unavailable") return std::string("nicht verfügbar");
+            return x;
+      - lvgl.label.update:
+          id: lbl_ac_mode
+          text: !lambda |-
+            if (x == "cool") return std::string("Modus: Kühlen");
+            if (x == "heat") return std::string("Modus: Heizen");
+            if (x == "fan_only") return std::string("Modus: Lüften");
+            if (x == "heat_cool") return std::string("Modus: Auto");
+            if (x == "dry") return std::string("Modus: Entf.");
+            return std::string("Modus");
+      - lvgl.widget.update: { id: btn_acm_0, state: { checked: !lambda 'return x == "off";' } }
+      - lvgl.widget.update: { id: btn_acm_1, state: { checked: !lambda 'return x == "cool";' } }
+      - lvgl.widget.update: { id: btn_acm_2, state: { checked: !lambda 'return x == "heat";' } }
+      - lvgl.widget.update: { id: btn_acm_3, state: { checked: !lambda 'return x == "fan_only";' } }
+      - lvgl.widget.update: { id: btn_acm_4, state: { checked: !lambda 'return x == "heat_cool";' } }
+      - lvgl.widget.update: { id: btn_acm_5, state: { checked: !lambda 'return x == "dry";' } }
+      - lvgl.widget.update: { id: btn_ac_power, state: { checked: !lambda 'return x != "off" && x != "unavailable";' } }
+  - platform: homeassistant
+    id: ha_ac_fan
+    entity_id: climate.dometicklima_dometic_freshjet
+    attribute: fan_mode
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ac_fan
+          text: !lambda |-
+            if (x == "auto") return std::string("Lüfter A");
+            if (x == "low") return std::string("Lüfter 1");
+            if (x == "medium") return std::string("Lüfter 2");
+            if (x == "high") return std::string("Lüfter 3");
+            if (x == "Turbo") return std::string("Turbo");
+            return std::string("Lüfter");
+      - lvgl.widget.update: { id: btn_acf_0, state: { checked: !lambda 'return x == "auto";' } }
+      - lvgl.widget.update: { id: btn_acf_1, state: { checked: !lambda 'return x == "low";' } }
+      - lvgl.widget.update: { id: btn_acf_2, state: { checked: !lambda 'return x == "medium";' } }
+      - lvgl.widget.update: { id: btn_acf_3, state: { checked: !lambda 'return x == "high";' } }
+      - lvgl.widget.update: { id: btn_acf_4, state: { checked: !lambda 'return x == "Turbo";' } }
+  - platform: homeassistant
+    id: ha_webasto_status
+    entity_id: sensor.webasto_webasto_status
+    on_value:
+      - lvgl.label.update:
+          id: lbl_webasto_status
+          text: !lambda 'return x;'
+      - lvgl.label.update:
+          id: lbl_webasto_home
+          text: !lambda 'return x;'
+  - platform: homeassistant
+    id: ha_webasto_mode
+    entity_id: select.webasto_webasto_heizmodus
+    on_value:
+      - lvgl.label.update:
+          id: lbl_webasto_mode
+          text: !lambda 'return "Modus: " + x;'
+      - lvgl.widget.update: { id: btn_wbm_0, state: { checked: !lambda 'return x == "Eco";' } }
+      - lvgl.widget.update: { id: btn_wbm_1, state: { checked: !lambda 'return x == "Normal";' } }
+      - lvgl.widget.update: { id: btn_wbm_2, state: { checked: !lambda 'return x == "Boost";' } }
+  - platform: homeassistant
+    id: ha_ventil
+    entity_id: cover.pekaway_van_pi_grauwasser_ventil
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ventil
+          text: !lambda |-
+            if (x == "open") return std::string("offen");
+            if (x == "closed") return std::string("geschlossen");
+            if (x == "opening") return std::string("öffnet …");
+            if (x == "closing") return std::string("schließt …");
+            if (x == "unavailable") return std::string("nicht verfügbar");
+            return x;
+  - platform: homeassistant
+    id: ha_dplus
+    entity_id: switch.pekaway_van_pi_d_plus
+    on_value:
+      - lvgl.label.update:
+          id: lbl_dplus
+          text: !lambda 'return x == "on" ? std::string("an – Motor läuft") : x == "off" ? std::string("aus") : std::string("nicht verfügbar");'
+
+binary_sensor:
+  # Lichter
+  - platform: homeassistant
+    id: l_haupt
+    entity_id: light.hauptlicht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_haupt, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_haupt, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_ambiente
+    entity_id: light.ambiente_licht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_ambiente, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_ambiente, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_bad
+    entity_id: light.badlicht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_bad, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_bad, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_markise
+    entity_id: light.markisenlicht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_markise, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_markise, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_aussen
+    entity_id: light.aussenlicht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_aussen, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_aussen, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_tv
+    entity_id: light.tv_ambientelicht
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_tv, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_tv, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_klima_innen
+    entity_id: light.dometicklima_freshjet_innenbeleuchtung
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_klima_innen, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_klima_innen, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: l_klima_aussen
+    entity_id: light.dometicklima_freshjet_aussenbeleuchtung
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_l_klima_aussen, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: st_l_klima_aussen, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  # Schalter
+  - platform: homeassistant
+    id: s_pumpe
+    entity_id: switch.pumpen_bridge_wasserpumpe_direkt
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_pumpe, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: lbl_pumpe, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+      - lvgl.widget.update: { id: btn_pumpe_home, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: lbl_pumpe_home, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: s_lader
+    entity_id: switch.al_ko_ladegerat
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_lader, state: { checked: !lambda return x; } }
+      - lvgl.label.update: { id: lbl_lader, text: !lambda 'return x ? std::string("an") : std::string("aus");' }
+  - platform: homeassistant
+    id: s_boiler_dc
+    entity_id: switch.pekaway_smart_boil_dc_heating
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_boiler_dc, state: { checked: !lambda return x; } }
+  - platform: homeassistant
+    id: s_boiler_ac
+    entity_id: switch.pekaway_smart_boil_ac_external_heating
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_boiler_ac, state: { checked: !lambda return x; } }
+  - platform: homeassistant
+    id: s_boiler_auto
+    entity_id: switch.pekaway_smart_boil_auto_heat_shore_power
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_boiler_auto, state: { checked: !lambda return x; } }
+  - platform: homeassistant
+    id: s_ps_ac
+    entity_id: switch.camper_af_p280_fossibot_xxxx_ac_output
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_ps_ac, state: { checked: !lambda return x; } }
+  - platform: homeassistant
+    id: s_ps_dc
+    entity_id: switch.camper_af_p280_fossibot_xxxx_dc_output
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_ps_dc, state: { checked: !lambda return x; } }
+  - platform: homeassistant
+    id: s_ps_usb
+    entity_id: switch.camper_af_p280_fossibot_xxxx_usb_output
+    trigger_on_initial_state: true
+    on_state:
+      - lvgl.widget.update: { id: btn_ps_usb, state: { checked: !lambda return x; } }
+  # Warnungen
+  - platform: homeassistant
+    id: w_tuer
+    entity_id: binary_sensor.camper_aufbautur_tur
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+  - platform: homeassistant
+    id: w_garage_f
+    entity_id: binary_sensor.myggbett_door_window_sensor_tur
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+  - platform: homeassistant
+    id: w_garage_b
+    entity_id: binary_sensor.camper_garage_beifahrerseite_tur
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+  - platform: homeassistant
+    id: w_leck_klappe
+    entity_id: binary_sensor.camper_sensor_wasserklappe_wasserleck
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+  - platform: homeassistant
+    id: w_leck_wc
+    entity_id: binary_sensor.camper_wc_klappe_wasserleck
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+  - platform: homeassistant
+    id: w_rauch
+    entity_id: binary_sensor.camper_rauchmelder_rauch
+    trigger_on_initial_state: true
+    on_state: [script.execute: update_status]
+
+# ---------------------------------------------------------------- Hilfsfunktionen
+
+globals:
+  # Webasto-Soll, das bei ausgeschalteter Heizung erst beim Start gesendet wird
+  - id: wb_soll
+    type: int
+    initial_value: '20'
+  - id: warn_aktiv
+    type: bool
+    initial_value: 'false'
+
+script:
+  - id: update_status
+    mode: queued
+    then:
+      - lvgl.label.update:
+          id: lbl_warn
+          text: !lambda |-
+            std::string w;
+            auto add = [&](const char *s) { if (!w.empty()) w += "  ·  "; w += s; };
+            if (id(w_rauch).state) add("RAUCH");
+            if (id(w_leck_klappe).state || id(w_leck_wc).state) add("Wasserleck");
+            if (id(ha_t_pumpe).state < 3 || id(ha_t_tank).state < 3) add("Frost Wasser");
+            else if (id(ha_t_aussen).state < 2) add("Frostgefahr");
+            if (id(ha_kond).state < 1) add("Kondenswasser");
+            if (id(w_tuer).state) add("Tür offen");
+            if (id(w_garage_f).state || id(w_garage_b).state) add("Garage offen");
+            id(warn_aktiv) = !w.empty();
+            return w;
+      - if:
+          condition:
+            lambda: 'return id(warn_aktiv);'
+          then:
+            - lvgl.widget.hide: chip_ok
+            - lvgl.widget.show: chip_warn
+          else:
+            - lvgl.widget.hide: chip_warn
+            - lvgl.widget.show: chip_ok
+      - lvgl.label.update:
+          id: lbl_sb_soc
+          text: !lambda 'return isnan(id(ha_soc).state) ? std::string("–") : str_sprintf("%.0f %%", id(ha_soc).state);'
+      - lvgl.label.update:
+          id: lbl_sb_temp
+          text: !lambda 'return isnan(id(ha_t_aussen).state) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%.1f °C", id(ha_t_aussen).state));'
+  - id: update_battery_detail
+    mode: queued
+    then:
+      - lvgl.label.update:
+          id: lbl_batt_a_home
+          text: !lambda 'return isnan(id(ha_batt_a).state) ? std::string("") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%+.1f A", id(ha_batt_a).state));'
+      - lvgl.label.update:
+          id: lbl_batt_detail
+          text: !lambda |-
+            float a = id(ha_batt_a).state, v = id(ha_batt_v).state;
+            std::string s = isnan(v) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; }(str_sprintf("%.2f V", v));
+            if (!isnan(a)) s += "   " + [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; }(str_sprintf("%+.1f A", a)) + (a > 0.2 ? "  lädt" : a < -0.2 ? "  entlädt" : "");
+            return s;
+  - id: update_powerstation
+    mode: queued
+    then:
+      - lvgl.label.update:
+          id: lbl_ps_detail
+          text: !lambda 'return str_sprintf("rein %.0f W · raus %.0f W", isnan(id(ha_ps_in).state) ? 0.0f : id(ha_ps_in).state, isnan(id(ha_ps_out).state) ? 0.0f : id(ha_ps_out).state);'
+  - id: update_water_temps
+    mode: queued
+    then:
+      - lvgl.label.update:
+          id: lbl_water_temps
+          text: !lambda |-
+            auto t = [](float v) { return isnan(v) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; }(str_sprintf("%.1f °C", v)); };
+            auto c = [](float v) { return (!isnan(v) && v < 3) ? std::string("#ef4444 ") : std::string(""); };
+            auto e = [](float v) { return (!isnan(v) && v < 3) ? std::string("#") : std::string(""); };
+            float tk = id(ha_t_tank).state, pu = id(ha_t_pumpe).state, gr = id(ha_t_grau).state;
+            return "Frischwassertank  " + c(tk) + t(tk) + e(tk) + "\nPumpe  " + c(pu) + t(pu) + e(pu) + "\nGrauwasser  " + c(gr) + t(gr) + e(gr);
+  - id: update_climate
+    mode: queued
+    then:
+      - lvgl.label.update:
+          id: lbl_innen_home
+          text: !lambda 'return isnan(id(ha_t_innen).state) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%.1f °C", id(ha_t_innen).state));'
+      - lvgl.label.update:
+          id: lbl_aussen_home
+          text: !lambda 'return isnan(id(ha_t_aussen).state) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%.1f °C", id(ha_t_aussen).state));'
+      - lvgl.label.update:
+          id: lbl_innen
+          text: !lambda 'return isnan(id(ha_t_innen).state) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == ''.'') ch = '',''; return s; }(str_sprintf("%.1f °C", id(ha_t_innen).state));'
+      - lvgl.label.update:
+          id: lbl_innen_detail
+          text: !lambda |-
+            std::string s;
+            if (!isnan(id(ha_rh_innen).state)) s += str_sprintf("Luftfeuchte %.0f %%", id(ha_rh_innen).state);
+            if (!isnan(id(ha_taupunkt).state)) s += "   Taupunkt " + [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; }(str_sprintf("%.1f °C", id(ha_taupunkt).state));
+            return s;
+      - lvgl.label.update:
+          id: lbl_sitz_aussen
+          text: !lambda |-
+            auto t = [](float v) { return isnan(v) ? std::string("–") : [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; }(str_sprintf("%.1f °C", v)); };
+            return "Sitzecke " + t(id(ha_t_sitz).state) + "     Außen " + t(id(ha_t_aussen).state);
+
+interval:
+  - interval: 10s
+    then:
+      - lvgl.label.update:
+          id: lbl_clock
+          text: !lambda |-
+            auto now = id(ha_time).now();
+            return now.is_valid() ? now.strftime("%H:%M") : std::string("--:--");
+
+# ---------------------------------------------------------------- Logo
+# BLACKFOREST VANLIFE im Fichtenwald als Hintergrund, abgedunkelt
+# (bfvl-bg.svg enthält das JPEG bfvl-bg.jpg eingebettet, 1024×600)
+image:
+  - file: bfvl-bg.svg
+    id: img_bfvl
+    type: RGB565
+    resize: 1024x600
+
+# ---------------------------------------------------------------- Oberfläche
+# Jede Kachel und jedes Label bekommt eine ausdrückliche Textfarbe: ohne sie zeichnet das
+# Standard-Theme die Schrift fast in Kachelfarbe.
+
+lvgl:
+  # Bild um 180° drehen, damit es im Gehäuse richtig herum steht
+  rotation: 180
+  buffer_size: 100%
+  byte_order: little_endian
+  displays: [main_display]
+  touchscreens: [touch]
+  bg_color: 0x0E1116
+  text_font: f_s
+  text_color: 0xF2F4F7
+  # Nach 1 min dimmen, nach 5 min aus
+  on_idle:
+    - timeout: 60s
+      then:
+        - light.turn_on:
+            id: backlight
+            brightness: 25%
+    - timeout: 300s
+      then:
+        - light.turn_off: backlight
+        - lvgl.pause:
+
+  style_definitions:
+    - id: st_card
+      bg_color: 0x181C22
+      bg_opa: 82%
+      text_color: 0xF2F4F7
+      radius: 18
+      border_width: 0
+      shadow_width: 0
+      pad_all: 16
+    - id: st_tile
+      bg_color: 0x181C22
+      bg_opa: 82%
+      text_color: 0x5C6470
+      radius: 18
+      border_width: 0
+      shadow_width: 0
+      pad_all: 14
+    - id: st_nav
+      bg_opa: TRANSP
+      text_color: 0x9AA4B2
+      radius: 12
+      border_width: 0
+      shadow_width: 0
+      pad_all: 0
+    - id: st_dim
+      text_color: 0x9AA4B2
+      text_font: f_xs
+
+  theme:
+    button:
+      bg_color: 0x181C22
+      radius: 18
+      border_width: 0
+      shadow_width: 0
+      text_font: f_m
+      pressed:
+        bg_color: 0x2A3340
+
+  top_layer:
+    widgets:
+      # Statusleiste oben
+      - obj:
+          x: 0
+          y: 0
+          width: 1024
+          height: 56
+          bg_color: 0x0A0C10
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          scrollbar_mode: "OFF"
+          widgets:
+            - label: { id: lbl_clock, text: "--:--", text_font: f_m, text_color: 0xF2F4F7, align: LEFT_MID, x: 20 }
+            - obj:
+                id: chip_ok
+                align: CENTER
+                width: 230
+                height: 34
+                radius: 17
+                bg_color: 0x12301F
+                border_width: 0
+                pad_all: 0
+                widgets:
+                  - label: { text: "\U000F05E0", text_font: f_icon_s, text_color: 0x22C55E, align: LEFT_MID, x: 14 }
+                  - label: { text: "Alles in Ordnung", text_font: f_s, text_color: 0x22C55E, align: LEFT_MID, x: 44 }
+            - obj:
+                id: chip_warn
+                hidden: true
+                align: CENTER
+                width: 480
+                height: 34
+                radius: 17
+                bg_color: 0x3A1518
+                border_width: 0
+                pad_all: 0
+                widgets:
+                  - label: { text: "\U000F0028", text_font: f_icon_s, text_color: 0xEF4444, align: LEFT_MID, x: 14 }
+                  - label: { id: lbl_warn, text: "", text_font: f_s, text_color: 0xEF4444, align: LEFT_MID, x: 44 }
+            - label: { text: "\U000F0084", text_font: f_icon_s, text_color: 0x22C55E, align: RIGHT_MID, x: -186 }
+            - label: { id: lbl_sb_soc, text: "–", text_font: f_s, text_color: 0x9AA4B2, align: LEFT_MID, x: 846 }
+            - label: { text: "\U000F0405", text_font: f_icon_s, text_color: 0x5DCAA5, align: LEFT_MID, x: 912 }
+            - label: { id: lbl_sb_temp, text: "–", text_font: f_s, text_color: 0x9AA4B2, align: LEFT_MID, x: 940 }
+      # Navigation unten
+      - obj:
+          x: 0
+          y: 544
+          width: 1024
+          height: 56
+          bg_color: 0x0A0C10
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          scrollbar_mode: "OFF"
+          widgets:
+            - button:
+                id: nav_home
+                styles: st_nav
+                x: 8
+                y: 6
+                width: 246
+                height: 44
+                checked:
+                  bg_color: 0x1C2A3D
+                  bg_opa: COVER
+                  text_color: 0x7FB3F0
+                widgets:
+                  - label: { text: "\U000F056E", text_font: f_icon_s, align: LEFT_MID, x: 62 }
+                  - label: { text: "Übersicht", text_font: f_s, align: LEFT_MID, x: 94 }
+                on_click: [lvgl.page.show: page_home]
+            - button:
+                id: nav_wasser
+                styles: st_nav
+                x: 262
+                y: 6
+                width: 246
+                height: 44
+                checked:
+                  bg_color: 0x1C2A3D
+                  bg_opa: COVER
+                  text_color: 0x7FB3F0
+                widgets:
+                  - label: { text: "\U000F058C", text_font: f_icon_s, align: LEFT_MID, x: 62 }
+                  - label: { text: "Wasser", text_font: f_s, align: LEFT_MID, x: 94 }
+                on_click: [lvgl.page.show: page_wasser]
+            - button:
+                id: nav_energie
+                styles: st_nav
+                x: 516
+                y: 6
+                width: 246
+                height: 44
+                checked:
+                  bg_color: 0x1C2A3D
+                  bg_opa: COVER
+                  text_color: 0x7FB3F0
+                widgets:
+                  - label: { text: "\U000F140B", text_font: f_icon_s, align: LEFT_MID, x: 62 }
+                  - label: { text: "Energie", text_font: f_s, align: LEFT_MID, x: 94 }
+                on_click: [lvgl.page.show: page_energie]
+            - button:
+                id: nav_klima
+                styles: st_nav
+                x: 770
+                y: 6
+                width: 246
+                height: 44
+                checked:
+                  bg_color: 0x1C2A3D
+                  bg_opa: COVER
+                  text_color: 0x7FB3F0
+                widgets:
+                  - label: { text: "\U000F0238", text_font: f_icon_s, align: LEFT_MID, x: 62 }
+                  - label: { text: "Klima", text_font: f_s, align: LEFT_MID, x: 94 }
+                on_click: [lvgl.page.show: page_klima]
+
+      # Auswahlfenster: Betriebsart Klimaanlage
+      - obj:
+          id: ov_ac_mode
+          hidden: true
+          x: 0
+          y: 0
+          width: 1024
+          height: 600
+          bg_color: 0x000000
+          bg_opa: 70%
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          on_click: [lvgl.widget.hide: ov_ac_mode]
+          widgets:
+            - obj:
+                align: CENTER
+                width: 612
+                height: 274
+                bg_color: 0x181C22
+                radius: 22
+                border_width: 0
+                pad_all: 24
+                widgets:
+                  - label: { text: "Betriebsart Klimaanlage", text_font: f_m, text_color: 0xF2F4F7, align: TOP_LEFT, y: -6 }
+                  - button:
+                      id: btn_acm_0
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 0
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Aus", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "off" } }
+                        - lvgl.widget.hide: ov_ac_mode
+                  - button:
+                      id: btn_acm_1
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 192
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Kühlen", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "cool" } }
+                        - lvgl.widget.hide: ov_ac_mode
+                  - button:
+                      id: btn_acm_2
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 384
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Heizen", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "heat" } }
+                        - lvgl.widget.hide: ov_ac_mode
+                  - button:
+                      id: btn_acm_3
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 0
+                      y: 142
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Lüften", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "fan_only" } }
+                        - lvgl.widget.hide: ov_ac_mode
+                  - button:
+                      id: btn_acm_4
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 192
+                      y: 142
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Auto", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "heat_cool" } }
+                        - lvgl.widget.hide: ov_ac_mode
+                  - button:
+                      id: btn_acm_5
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 384
+                      y: 142
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Entfeuchten", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_hvac_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, hvac_mode: "dry" } }
+                        - lvgl.widget.hide: ov_ac_mode
+      # Auswahlfenster: Lüfterstufe
+      - obj:
+          id: ov_ac_fan
+          hidden: true
+          x: 0
+          y: 0
+          width: 1024
+          height: 600
+          bg_color: 0x000000
+          bg_opa: 70%
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          on_click: [lvgl.widget.hide: ov_ac_fan]
+          widgets:
+            - obj:
+                align: CENTER
+                width: 996
+                height: 178
+                bg_color: 0x181C22
+                radius: 22
+                border_width: 0
+                pad_all: 24
+                widgets:
+                  - label: { text: "Lüfterstufe", text_font: f_m, text_color: 0xF2F4F7, align: TOP_LEFT, y: -6 }
+                  - button:
+                      id: btn_acf_0
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 0
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Auto", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_fan_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, fan_mode: "auto" } }
+                        - lvgl.widget.hide: ov_ac_fan
+                  - button:
+                      id: btn_acf_1
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 192
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Stufe 1", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_fan_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, fan_mode: "low" } }
+                        - lvgl.widget.hide: ov_ac_fan
+                  - button:
+                      id: btn_acf_2
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 384
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Stufe 2", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_fan_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, fan_mode: "medium" } }
+                        - lvgl.widget.hide: ov_ac_fan
+                  - button:
+                      id: btn_acf_3
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 576
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Stufe 3", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_fan_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, fan_mode: "high" } }
+                        - lvgl.widget.hide: ov_ac_fan
+                  - button:
+                      id: btn_acf_4
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 768
+                      y: 46
+                      width: 180
+                      height: 84
+                      checked:
+                        bg_color: 0x1C2A3D
+                        text_color: 0x7FB3F0
+                      widgets: [label: { text: "Turbo", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: climate.set_fan_mode, data: { entity_id: climate.dometicklima_dometic_freshjet, fan_mode: "Turbo" } }
+                        - lvgl.widget.hide: ov_ac_fan
+
+      # Auswahlfenster: Webasto-Modus
+      - obj:
+          id: ov_wb_mode
+          hidden: true
+          x: 0
+          y: 0
+          width: 1024
+          height: 600
+          bg_color: 0x000000
+          bg_opa: 70%
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          on_click: [lvgl.widget.hide: ov_wb_mode]
+          widgets:
+            - obj:
+                align: CENTER
+                width: 636
+                height: 200
+                bg_color: 0x181C22
+                radius: 22
+                border_width: 0
+                pad_all: 24
+                widgets:
+                  - label: { text: "Heizmodus Webasto", text_font: f_m, text_color: 0xF2F4F7, align: TOP_LEFT, y: -6 }
+                  - button:
+                      id: btn_wbm_0
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 0
+                      y: 46
+                      width: 184
+                      height: 84
+                      checked:
+                        bg_color: 0x3A3020
+                        text_color: 0xFBBF24
+                      widgets: [label: { text: "Eco", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: select.select_option, data: { entity_id: select.webasto_webasto_heizmodus, option: "Eco" } }
+                        - lvgl.widget.hide: ov_wb_mode
+                  - button:
+                      id: btn_wbm_1
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 196
+                      y: 46
+                      width: 184
+                      height: 84
+                      checked:
+                        bg_color: 0x3A3020
+                        text_color: 0xFBBF24
+                      widgets: [label: { text: "Normal", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: select.select_option, data: { entity_id: select.webasto_webasto_heizmodus, option: "Normal" } }
+                        - lvgl.widget.hide: ov_wb_mode
+                  - button:
+                      id: btn_wbm_2
+                      styles: st_tile
+                      align: TOP_LEFT
+                      x: 392
+                      y: 46
+                      width: 184
+                      height: 84
+                      checked:
+                        bg_color: 0x3A3020
+                        text_color: 0xFBBF24
+                      widgets: [label: { text: "Boost", text_font: f_m, align: CENTER }]
+                      on_click:
+                        - homeassistant.action: { action: select.select_option, data: { entity_id: select.webasto_webasto_heizmodus, option: "Boost" } }
+                        - lvgl.widget.hide: ov_wb_mode
+
+  pages:
+    - id: page_home
+      bg_color: 0x0E1116
+      scrollbar_mode: "OFF"
+      on_load:
+        - lvgl.widget.update: { id: nav_home, state: { checked: true } }
+        - lvgl.widget.update: { id: [nav_wasser, nav_energie, nav_klima], state: { checked: false } }
+      widgets:
+        - image: { src: img_bfvl, x: 0, y: 0 }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 72
+            width: 360
+            height: 136
+            widgets:
+              - label: { text: "\U000F0084", text_font: f_icon_s, text_color: 0x22C55E, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Batterie", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_soc_home, text: "–", text_font: f_xl, align: LEFT_MID, y: 4 }
+              - label: { id: lbl_batt_a_home, text: "", styles: st_dim, align: RIGHT_MID, y: 8 }
+              - bar: { id: bar_soc_home, align: BOTTOM_MID, width: 328, height: 8, min_value: 0, max_value: 100, value: 0, bg_color: 0x2A3038, radius: 4, indicator: { bg_color: 0x22C55E, radius: 4 } }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 220
+            width: 360
+            height: 140
+            widgets:
+              - label: { text: "\U000F058C", text_font: f_icon_s, text_color: 0x3B8EE8, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Frisch", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { text: "\U000F058C", text_font: f_icon_s, text_color: 0xA8977A, align: TOP_LEFT, x: 172, y: 0 }
+              - label: { text: "Grau", styles: st_dim, align: TOP_LEFT, x: 202, y: 2 }
+              - label: { id: lbl_fw_home, text: "–", text_font: f_l, align: BOTTOM_LEFT }
+              - label: { id: lbl_gw_home, text: "–", text_font: f_l, align: BOTTOM_LEFT, x: 172 }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 372
+            width: 360
+            height: 156
+            widgets:
+              - label: { text: "\U000F0F54", text_font: f_icon_s, text_color: 0xF59E0B, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Innen", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { text: "\U000F0405", text_font: f_icon_s, text_color: 0x5DCAA5, align: TOP_LEFT, x: 172, y: 0 }
+              - label: { text: "Außen", styles: st_dim, align: TOP_LEFT, x: 202, y: 2 }
+              - label: { id: lbl_innen_home, text: "–", text_font: f_l, align: BOTTOM_LEFT }
+              - label: { id: lbl_aussen_home, text: "–", text_font: f_l, align: BOTTOM_LEFT, x: 172 }
+        - button:
+            id: btn_l_haupt
+            styles: st_tile
+            x: 392
+            y: 72
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F0335", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Hauptlicht", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_haupt, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.hauptlicht } }
+        - button:
+            id: btn_l_ambiente
+            styles: st_tile
+            x: 548
+            y: 72
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F0335", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Ambiente", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_ambiente, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.ambiente_licht } }
+        - button:
+            id: btn_l_bad
+            styles: st_tile
+            x: 704
+            y: 72
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F09A0", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Bad", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_bad, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.badlicht } }
+        - button:
+            id: btn_l_tv
+            styles: st_tile
+            x: 860
+            y: 72
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F1356", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "TV Ambiente", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_tv, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.tv_ambientelicht } }
+        - button:
+            id: btn_l_markise
+            styles: st_tile
+            x: 392
+            y: 194
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F1B88", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Markise", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_markise, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.markisenlicht } }
+        - button:
+            id: btn_l_aussen
+            styles: st_tile
+            x: 548
+            y: 194
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F1054", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Außen", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_aussen, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.aussenlicht } }
+        - button:
+            id: btn_l_klima_innen
+            styles: st_tile
+            x: 704
+            y: 194
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F001B", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Klima innen", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_klima_innen, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.dometicklima_freshjet_innenbeleuchtung } }
+        - button:
+            id: btn_l_klima_aussen
+            styles: st_tile
+            x: 860
+            y: 194
+            width: 146
+            height: 112
+            checked:
+              bg_color: 0x3A3020
+              text_color: 0xFBBF24
+            widgets:
+              - label: { text: "\U000F001B", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Klima außen", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: st_l_klima_aussen, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+            on_click:
+              - homeassistant.action: { action: light.toggle, data: { entity_id: light.dometicklima_freshjet_aussenbeleuchtung } }
+        - button:
+            styles: st_tile
+            x: 392
+            y: 316
+            width: 616
+            height: 64
+            widgets:
+              - label: { text: "\U000F12CE", text_font: f_icon_s, text_color: 0xEF4444, align: CENTER, x: -58 }
+              - label: { text: "Alles aus", text_font: f_m, text_color: 0xF2F4F7, align: CENTER, x: 22 }
+            on_click:
+              - homeassistant.action:
+                  action: light.turn_off
+                  data:
+                    entity_id: light.hauptlicht, light.ambiente_licht, light.badlicht, light.tv_ambientelicht, light.markisenlicht, light.aussenlicht, light.dometicklima_freshjet_innenbeleuchtung, light.dometicklima_freshjet_aussenbeleuchtung
+        - button:
+            id: btn_pumpe_home
+            styles: st_tile
+            x: 392
+            y: 392
+            width: 302
+            height: 136
+            checked:
+              bg_color: 0x1C2A3D
+              text_color: 0x3B8EE8
+            widgets:
+              - label: { text: "\U000F058F", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Wasserpumpe", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: lbl_pumpe_home, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+              - button:
+                  id: btn_dsh3
+                  align: TOP_RIGHT
+                  x: 0
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "3", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "3"
+              - button:
+                  id: btn_dsh2
+                  align: TOP_RIGHT
+                  x: -52
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "2", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "2"
+              - button:
+                  id: btn_dsh1
+                  align: TOP_RIGHT
+                  x: -104
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "1", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "1"
+            on_click:
+              - homeassistant.action: { action: switch.toggle, data: { entity_id: switch.pumpen_bridge_wasserpumpe_direkt } }
+        - button:
+            styles: st_tile
+            x: 706
+            y: 392
+            width: 302
+            height: 136
+            text_color: 0xF59E0B
+            widgets:
+              - label: { text: "\U000F0238", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Heizung", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: lbl_webasto_home, text: "–", text_font: f_xs, text_color: 0x9AA4B2, align: BOTTOM_LEFT }
+            on_click: [lvgl.page.show: page_klima]
+    - id: page_wasser
+      bg_color: 0x0E1116
+      scrollbar_mode: "OFF"
+      on_load:
+        - lvgl.widget.update: { id: nav_wasser, state: { checked: true } }
+        - lvgl.widget.update: { id: [nav_home, nav_energie, nav_klima], state: { checked: false } }
+      widgets:
+        - image: { src: img_bfvl, x: 0, y: 0 }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 72
+            width: 320
+            height: 456
+            widgets:
+              - label: { text: "\U000F058C", text_font: f_icon_s, text_color: 0x3B8EE8, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Frischwasser", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - bar: { id: bar_fw, align: BOTTOM_LEFT, width: 64, height: 360, min_value: 0, max_value: 100, value: 0, bg_color: 0x2A3038, radius: 14, indicator: { bg_color: 0x3B8EE8, radius: 14 } }
+              - label: { id: lbl_fw, text: "–", text_font: f_xl, align: RIGHT_MID }
+        - obj:
+            styles: st_card
+            x: 352
+            y: 72
+            width: 320
+            height: 456
+            widgets:
+              - label: { text: "\U000F058C", text_font: f_icon_s, text_color: 0xA8977A, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Grauwasser", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - bar: { id: bar_gw, align: BOTTOM_LEFT, width: 64, height: 360, min_value: 0, max_value: 100, value: 0, bg_color: 0x2A3038, radius: 14, indicator: { bg_color: 0xA8977A, radius: 14 } }
+              - label: { id: lbl_gw, text: "–", text_font: f_xl, align: RIGHT_MID }
+        - button:
+            id: btn_pumpe
+            styles: st_tile
+            x: 688
+            y: 72
+            width: 320
+            height: 112
+            checked:
+              bg_color: 0x1C2A3D
+              text_color: 0x3B8EE8
+            widgets:
+              - label: { text: "\U000F058F", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Wasserpumpe", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: lbl_pumpe, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+              - button:
+                  id: btn_dsw3
+                  align: TOP_RIGHT
+                  x: 0
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "3", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "3"
+              - button:
+                  id: btn_dsw2
+                  align: TOP_RIGHT
+                  x: -52
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "2", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "2"
+              - button:
+                  id: btn_dsw1
+                  align: TOP_RIGHT
+                  x: -104
+                  width: 44
+                  height: 44
+                  radius: 22
+                  bg_color: 0x2A3038
+                  bg_opa: COVER
+                  border_width: 0
+                  shadow_width: 0
+                  checked:
+                    bg_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "1", text_font: f_s, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: select.select_option
+                        data:
+                          entity_id: select.pumpen_bridge_pumpe_druckstufe
+                          option: "1"
+            on_click:
+              - homeassistant.action: { action: switch.toggle, data: { entity_id: switch.pumpen_bridge_wasserpumpe_direkt } }
+        - obj:
+            styles: st_card
+            x: 688
+            y: 196
+            width: 320
+            height: 196
+            widgets:
+              - label: { text: "\U000F1066", text_font: f_icon_s, text_color: 0xA8977A, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Grauwasser-Ventil", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_ventil, text: "–", text_font: f_m, align: TOP_LEFT, y: 30 }
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  width: 138
+                  height: 84
+                  bg_color: 0x16301F
+                  widgets:
+                    - label: { text: "Öffnen", text_font: f_m, text_color: 0x22C55E, align: CENTER, y: -10 }
+                    - label: { text: "lang drücken", text_font: f_xs, text_color: 0x9AA4B2, align: CENTER, y: 18 }
+                  # Ablassen nur mit langem Druck, damit ein versehentlicher Tipp kein Grauwasser ablässt
+                  on_long_press: [homeassistant.action: { action: cover.open_cover, data: { entity_id: cover.pekaway_van_pi_grauwasser_ventil } }]
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_RIGHT
+                  width: 138
+                  height: 84
+                  bg_color: 0x351A1D
+                  widgets:
+                    - label: { text: "Schließen", text_font: f_m, text_color: 0xEF4444, align: CENTER }
+                  on_click: [homeassistant.action: { action: cover.close_cover, data: { entity_id: cover.pekaway_van_pi_grauwasser_ventil } }]
+        - obj:
+            styles: st_card
+            x: 688
+            y: 404
+            width: 320
+            height: 124
+            widgets:
+              - label: { text: "\U000F050F", text_font: f_icon_s, text_color: 0xF59E0B, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Temperaturen", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_water_temps, text: "", recolor: true, text_font: f_s, align: BOTTOM_LEFT }
+    - id: page_energie
+      bg_color: 0x0E1116
+      scrollbar_mode: "OFF"
+      on_load:
+        - lvgl.widget.update: { id: nav_energie, state: { checked: true } }
+        - lvgl.widget.update: { id: [nav_home, nav_wasser, nav_klima], state: { checked: false } }
+      widgets:
+        - image: { src: img_bfvl, x: 0, y: 0 }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 72
+            width: 496
+            height: 220
+            widgets:
+              - label: { text: "\U000F0084", text_font: f_icon_s, text_color: 0x22C55E, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Aufbaubatterie", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_soc_energy, text: "–", text_font: f_xl, align: TOP_LEFT, y: 30 }
+              - bar: { id: bar_soc, align: BOTTOM_LEFT, y: -36, width: 464, height: 10, min_value: 0, max_value: 100, value: 0, bg_color: 0x2A3038, radius: 5, indicator: { bg_color: 0x22C55E, radius: 5 } }
+              - label: { id: lbl_batt_detail, text: "", styles: st_dim, text_font: f_s, align: BOTTOM_LEFT }
+        - obj:
+            styles: st_card
+            x: 528
+            y: 72
+            width: 232
+            height: 104
+            widgets:
+              - label: { text: "\U000F0D9B", text_font: f_icon_s, text_color: 0xFBBF24, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Solar Dach", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_pv_dach, text: "–", text_font: f_l, align: BOTTOM_LEFT }
+        - obj:
+            styles: st_card
+            x: 776
+            y: 72
+            width: 232
+            height: 104
+            widgets:
+              - label: { text: "\U000F0A72", text_font: f_icon_s, text_color: 0xFBBF24, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Solartasche", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_pv_tasche, text: "–", text_font: f_l, align: BOTTOM_LEFT }
+        - obj:
+            styles: st_card
+            x: 528
+            y: 188
+            width: 480
+            height: 104
+            widgets:
+              - label: { text: "\U000F01FA", text_font: f_icon_s, text_color: 0x9AA4B2, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "D+ (Ladebooster)", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_dplus, text: "–", text_font: f_m, align: BOTTOM_LEFT }
+        - button:
+            id: btn_lader
+            styles: st_tile
+            x: 16
+            y: 308
+            width: 496
+            height: 220
+            checked:
+              bg_color: 0x1C2A3D
+              text_color: 0x3B8EE8
+            widgets:
+              - label: { text: "\U000F06A5", text_font: f_icon, align: TOP_LEFT }
+              - label: { text: "Landstrom-Lader", text_font: f_s, text_color: 0xF2F4F7, align: BOTTOM_LEFT, y: -20 }
+              - label: { id: lbl_lader, text: "–", text_font: f_xs, align: BOTTOM_LEFT }
+              - label: { id: lbl_lader_detail, text: "", text_font: f_s, text_color: 0x9AA4B2, align: TOP_RIGHT }
+            on_click:
+              - homeassistant.action: { action: switch.toggle, data: { entity_id: switch.al_ko_ladegerat } }
+        - obj:
+            styles: st_card
+            x: 528
+            y: 308
+            width: 480
+            height: 220
+            widgets:
+              - label: { text: "\U000F1C3B", text_font: f_icon_s, text_color: 0x5DCAA5, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Powerstation Aferiy P280", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_ps_soc, text: "–", text_font: f_xl, align: LEFT_MID, y: 6 }
+              - label: { id: lbl_ps_detail, text: "", styles: st_dim, text_font: f_s, align: BOTTOM_LEFT }
+              - button:
+                  id: btn_ps_ac
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  y: 24
+                  width: 130
+                  height: 48
+                  pad_all: 4
+                  checked:
+                    bg_color: 0x12301F
+                    text_color: 0x22C55E
+                  widgets: [label: { text: "230 V", text_font: f_s, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.camper_af_p280_fossibot_xxxx_ac_output } }]
+              - button:
+                  id: btn_ps_dc
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  y: 80
+                  width: 130
+                  height: 48
+                  pad_all: 4
+                  checked:
+                    bg_color: 0x12301F
+                    text_color: 0x22C55E
+                  widgets: [label: { text: "12 V", text_font: f_s, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.camper_af_p280_fossibot_xxxx_dc_output } }]
+              - button:
+                  id: btn_ps_usb
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  y: 136
+                  width: 130
+                  height: 48
+                  pad_all: 4
+                  checked:
+                    bg_color: 0x12301F
+                    text_color: 0x22C55E
+                  widgets: [label: { text: "USB", text_font: f_s, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.camper_af_p280_fossibot_xxxx_usb_output } }]
+    - id: page_klima
+      bg_color: 0x0E1116
+      scrollbar_mode: "OFF"
+      on_load:
+        - lvgl.widget.update: { id: nav_klima, state: { checked: true } }
+        - lvgl.widget.update: { id: [nav_home, nav_wasser, nav_energie], state: { checked: false } }
+      widgets:
+        - image: { src: img_bfvl, x: 0, y: 0 }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 72
+            width: 400
+            height: 220
+            widgets:
+              - label: { text: "\U000F0F54", text_font: f_icon_s, text_color: 0xF59E0B, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Raumklima innen", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_innen, text: "–", text_font: f_xl, align: TOP_LEFT, y: 30 }
+              - label: { id: lbl_innen_detail, text: "", text_font: f_s, align: BOTTOM_LEFT, y: -30 }
+              - label: { id: lbl_sitz_aussen, text: "", styles: st_dim, text_font: f_s, align: BOTTOM_LEFT }
+        - obj:
+            styles: st_card
+            x: 16
+            y: 304
+            width: 400
+            height: 224
+            widgets:
+              - label: { text: "\U000F0F92", text_font: f_icon_s, text_color: 0xF59E0B, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Boiler", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_boiler_temp, text: "–", text_font: f_l, align: TOP_LEFT, y: 28 }
+              - label: { id: lbl_boiler_soll, text: "", styles: st_dim, align: TOP_LEFT, y: 78 }
+              - button:
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  x: -86
+                  y: 0
+                  width: 76
+                  height: 60
+                  widgets: [label: { text: "–", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }]
+                  on_click:
+                    - homeassistant.action:
+                        action: number.set_value
+                        data:
+                          entity_id: number.pekaway_smart_boil_target_temperature
+                          value: !lambda 'return to_string((int) id(ha_boiler_soll).state - 1);'
+              - button:
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  x: 0
+                  y: 0
+                  width: 76
+                  height: 60
+                  widgets: [label: { text: "+", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }]
+                  on_click:
+                    - homeassistant.action:
+                        action: number.set_value
+                        data:
+                          entity_id: number.pekaway_smart_boil_target_temperature
+                          value: !lambda 'return to_string((int) id(ha_boiler_soll).state + 1);'
+              - button:
+                  id: btn_boiler_dc
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  width: 116
+                  height: 64
+                  checked:
+                    bg_color: 0x3A3020
+                    text_color: 0xFBBF24
+                  widgets: [label: { text: "Heizen 12 V", text_font: f_xs, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.pekaway_smart_boil_dc_heating } }]
+              - button:
+                  id: btn_boiler_ac
+                  styles: st_tile
+                  align: BOTTOM_MID
+                  width: 116
+                  height: 64
+                  checked:
+                    bg_color: 0x3A3020
+                    text_color: 0xFBBF24
+                  widgets: [label: { text: "Heizen 230 V", text_font: f_xs, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.pekaway_smart_boil_ac_external_heating } }]
+              - button:
+                  id: btn_boiler_auto
+                  styles: st_tile
+                  align: BOTTOM_RIGHT
+                  width: 116
+                  height: 64
+                  checked:
+                    bg_color: 0x3A3020
+                    text_color: 0xFBBF24
+                  widgets: [label: { text: "Landstrom-Auto", text_font: f_xs, align: CENTER }]
+                  on_click: [homeassistant.action: { action: switch.toggle, data: { entity_id: switch.pekaway_smart_boil_auto_heat_shore_power } }]
+        - obj:
+            styles: st_card
+            x: 432
+            y: 72
+            width: 576
+            height: 268
+            widgets:
+              - label: { text: "\U000F0238", text_font: f_icon_s, text_color: 0xF59E0B, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Webasto Air Top Evo 55", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_webasto_status, text: "–", text_font: f_m, align: TOP_LEFT, y: 28 }
+              - label: { id: lbl_webasto_temp, text: "", styles: st_dim, text_font: f_s, align: TOP_RIGHT, y: 2 }
+              - button:
+                  styles: st_tile
+                  align: TOP_LEFT
+                  x: 0
+                  y: 72
+                  width: 90
+                  height: 64
+                  widgets: [label: { text: "–", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }]
+                  on_click:
+                    # Node-RED sendet den Sollwert nur bei laufender Heizung (seit 06.11.2026), sonst wird er gemerkt
+                    - homeassistant.action:
+                        action: number.set_value
+                        data:
+                          entity_id: number.webasto_solltemperatur
+                          value: !lambda 'return to_string(std::max(5, std::min(35, id(wb_soll) - 1)));'
+              - obj:
+                  align: TOP_LEFT
+                  x: 100
+                  y: 72
+                  width: 180
+                  height: 64
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    - label: { text: "Soll", styles: st_dim, align: TOP_MID }
+                    - label: { id: lbl_webasto_soll, text: "–", text_font: f_l, text_color: 0xF2F4F7, align: BOTTOM_MID }
+              - button:
+                  styles: st_tile
+                  align: TOP_LEFT
+                  x: 290
+                  y: 72
+                  width: 90
+                  height: 64
+                  widgets: [label: { text: "+", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }]
+                  on_click:
+                    # Node-RED sendet den Sollwert nur bei laufender Heizung (seit 06.11.2026), sonst wird er gemerkt
+                    - homeassistant.action:
+                        action: number.set_value
+                        data:
+                          entity_id: number.webasto_solltemperatur
+                          value: !lambda 'return to_string(std::max(5, std::min(35, id(wb_soll) + 1)));'
+              - button:
+                  styles: st_tile
+                  align: TOP_RIGHT
+                  y: 72
+                  width: 154
+                  height: 64
+                  widgets: [label: { id: lbl_webasto_mode, text: "Modus", text_font: f_xs, text_color: 0xF2F4F7, align: CENTER }]
+                  on_click: [lvgl.widget.show: ov_wb_mode]
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  width: 267
+                  height: 72
+                  bg_color: 0x16301F
+                  widgets: [label: { text: "Start", text_font: f_m, text_color: 0x22C55E, align: CENTER }]
+                  on_click:
+                    # vorgemerktes Soll zuerst senden (startet die Heizung), dann Start mit Laufzeit-Timer
+                    - if:
+                        condition:
+                          lambda: 'return isnan(id(ha_webasto_soll).state) || id(wb_soll) != (int) id(ha_webasto_soll).state;'
+                        then:
+                          - homeassistant.action:
+                              action: number.set_value
+                              data:
+                                entity_id: number.webasto_solltemperatur
+                                value: !lambda 'return to_string(id(wb_soll));'
+                    - homeassistant.action: { action: script.webasto_start_mit_timer }
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_RIGHT
+                  width: 267
+                  height: 72
+                  bg_color: 0x351A1D
+                  widgets: [label: { text: "Stop", text_font: f_m, text_color: 0xEF4444, align: CENTER }]
+                  on_click: [homeassistant.action: { action: script.webasto_stop }]
+        - obj:
+            styles: st_card
+            x: 432
+            y: 352
+            width: 576
+            height: 176
+            widgets:
+              - label: { text: "\U000F001B", text_font: f_icon_s, text_color: 0x3B8EE8, align: TOP_LEFT, x: 0, y: 0 }
+              - label: { text: "Klimaanlage Dometic", styles: st_dim, align: TOP_LEFT, x: 30, y: 2 }
+              - label: { id: lbl_ac_state, text: "–", text_font: f_m, align: TOP_LEFT, y: 26 }
+              - label: { id: lbl_ac_temp, text: "", styles: st_dim, text_font: f_s, align: TOP_RIGHT, y: 2 }
+              - button:
+                  id: btn_ac_power
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  x: 0
+                  width: 110
+                  height: 70
+                  pad_all: 4
+                  checked:
+                    bg_color: 0x1C2A3D
+                    text_color: 0x3B8EE8
+                  widgets:
+                    - label: { text: "Ein/Aus", text_font: f_s, align: CENTER }
+                  on_click:
+                    - homeassistant.action: { action: climate.toggle, data: { entity_id: climate.dometicklima_dometic_freshjet } }
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  x: 116
+                  width: 120
+                  height: 70
+                  pad_all: 4
+                  widgets:
+                    - label: { id: lbl_ac_mode, text: "Modus", text_font: f_xs, text_color: 0xF2F4F7, align: CENTER }
+                  on_click: [lvgl.widget.show: ov_ac_mode]
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  x: 242
+                  width: 64
+                  height: 70
+                  pad_all: 4
+                  widgets:
+                    - label: { text: "–", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: climate.set_temperature
+                        data:
+                          entity_id: climate.dometicklima_dometic_freshjet
+                          temperature: !lambda 'return to_string(std::max(16, (int) id(ha_ac_target).state - 1));'
+              - obj:
+                  align: BOTTOM_LEFT
+                  x: 312
+                  width: 80
+                  height: 70
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    - label: { text: "Soll", styles: st_dim, align: TOP_MID }
+                    - label: { id: lbl_ac_soll, text: "–", text_font: f_m, text_color: 0xF2F4F7, align: BOTTOM_MID }
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  x: 398
+                  width: 64
+                  height: 70
+                  pad_all: 4
+                  widgets:
+                    - label: { text: "+", text_font: f_l, text_color: 0xF2F4F7, align: CENTER }
+                  on_click:
+                    - homeassistant.action:
+                        action: climate.set_temperature
+                        data:
+                          entity_id: climate.dometicklima_dometic_freshjet
+                          temperature: !lambda 'return to_string(std::min(31, (int) id(ha_ac_target).state + 1));'
+              - button:
+                  styles: st_tile
+                  align: BOTTOM_LEFT
+                  x: 468
+                  width: 76
+                  height: 70
+                  pad_all: 4
+                  widgets:
+                    - label: { id: lbl_ac_fan, text: "Lüfter", text_font: f_xs, text_color: 0xF2F4F7, align: CENTER }
+                  on_click: [lvgl.widget.show: ov_ac_fan]

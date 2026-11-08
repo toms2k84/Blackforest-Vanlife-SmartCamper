@@ -1,0 +1,11 @@
+[Unit]
+Description=VanPi health check (reboot on SD card / system hang)
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vanpi-health.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,1762 @@
+# Camper-Dial: M5Stack Dial v1.1 (ESP32-S3 StampS3, 8 MB Flash, kein PSRAM)
+# Rundes 1,28"-Display GC9A01 (240×240), Touch FT3267, Drehgeber, Taster (ganzes Gehäuse drücken)
+# Seiten: Übersicht (Start), Licht, Webasto, Klima (Dometic), Außen, Grauwasser. Im Ruhezustand gedimmte Nachtuhr,
+# roter Warnring bei Rauch, Wasserleck oder Frost am Wasser. Doppeldruck = Szenen (Nacht/Morgen).
+# Bedienung: Drehen = wählen/verstellen (schnell = größere Schritte), Drücken = schalten, Tippen aufs Display = nächste Seite,
+# lang drücken = Menü (Webasto: Modus/Laufzeit, Klima: Modus, Wasser: Ventil), sonst zurück zur Übersicht. Die Logik bleibt in HA/Node-RED.
+
+substitutions:
+  name: camper-dial
+  friendly_name: Camper-Dial
+  # läuft die Webasto? (alles außer "Aus…", "Unbekannt…" und nicht verfügbar)
+  laeuft: '([](const std::string &s) { return !s.empty() && s != "unavailable" && s != "unknown" && s.rfind("Aus", 0) != 0 && s.rfind("Unbekannt", 0) != 0; })(id(ha_wb_status).state)'
+  glyphs: " !#%&'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyzÄÖÜäöüß°–·…"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    - priority: 800
+      then:
+        # v1.1: GPIO46 hält die Stromversorgung (wichtig bei Akkubetrieb)
+        - output.turn_on: hold_power
+    - priority: -100
+      then:
+        - lambda: 'id(letzte_aktion) = millis();'
+        - script.execute: thermo_anzeige
+        - script.execute: klima_anzeige
+        - script.execute: licht_anzeige
+        - script.execute: aussen_anzeige
+        - script.execute: wasser_anzeige
+        # Startbild kurz zeigen
+        - delay: 2500ms
+        - lambda: 'id(seite) = 5;'
+        - lvgl.page.show:
+            id: page_info
+            animation: FADE_IN
+            time: 400ms
+
+esp32:
+  variant: esp32s3
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: "__API_KEY__"
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - script.execute: uhr_anzeige
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: uhr_anzeige
+
+globals:
+  - id: wb_soll
+    type: int
+    initial_value: "20"
+  - id: licht_idx
+    type: int
+    initial_value: "0"
+  - id: ac_soll
+    type: int
+    initial_value: "22"
+  # Modus-Auswahl der Klimaanlage: -1 = zu, sonst Index in die Modusliste
+  - id: ac_menu
+    type: int
+    initial_value: "-1"
+  - id: seite
+    type: int
+    initial_value: "0"
+  - id: letzte_aktion
+    type: uint32_t
+    initial_value: "0"
+  # Webasto-Menü (lang drücken): -1 = zu, 0–2 Modus, 3–9 Laufzeit, 10 Start/Stopp
+  - id: wb_menu
+    type: int
+    initial_value: "-1"
+  # Auswahl auf der Außen- (0 Markise, 1 Außenlicht) und Wasser-Seite (0 Pumpe, 1 Druck, 2 Ventil)
+  - id: aussen_idx
+    type: int
+    initial_value: "0"
+  - id: wasser_idx
+    type: int
+    initial_value: "0"
+  # Szenen-Auswahl (Doppeldruck): -1 = zu, sonst Index
+  - id: szene_idx
+    type: int
+    initial_value: "-1"
+  - id: letzter_dreh
+    type: uint32_t
+    initial_value: "0"
+  - id: schritt
+    type: int
+    initial_value: "1"
+  # angezeigte Bogenwerte (×10) für weiches Nachlaufen
+  - id: arc_wb_ist
+    type: float
+    initial_value: "200"
+  - id: arc_ac_ist
+    type: float
+    initial_value: "220"
+  - id: warn_aktiv
+    type: bool
+    initial_value: "false"
+  - id: warn_blink
+    type: bool
+    initial_value: "false"
+  # 0 = hell, 1 = gedimmt, 2 = Nachtuhr
+  - id: dunkel
+    type: int
+    initial_value: "0"
+
+output:
+  - platform: gpio
+    pin: GPIO46
+    id: hold_power
+  - platform: ledc
+    pin: GPIO9
+    id: bl_out
+    frequency: 20000Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: Display
+    output: bl_out
+    restore_mode: ALWAYS_ON
+    default_transition_length: 400ms
+    icon: mdi:brightness-6
+
+number:
+  - platform: template
+    id: hell_normal
+    name: Display-Helligkeit
+    icon: mdi:brightness-6
+    entity_category: config
+    min_value: 10
+    max_value: 100
+    step: 5
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    initial_value: 60
+  - platform: template
+    id: nacht_helligkeit
+    name: Helligkeit Nachtuhr
+    icon: mdi:weather-night
+    entity_category: config
+    min_value: 0
+    max_value: 40
+    step: 1
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    initial_value: 15
+  - platform: template
+    id: aus_nach
+    name: Nachtuhr nach
+    icon: mdi:timer-outline
+    entity_category: config
+    min_value: 10
+    max_value: 600
+    step: 10
+    unit_of_measurement: s
+    optimistic: true
+    restore_value: true
+    initial_value: 60
+
+spi:
+  clk_pin: GPIO6
+  mosi_pin: GPIO5
+
+i2c:
+  sda: GPIO11
+  scl: GPIO12
+  id: bus_int
+  frequency: 400kHz
+
+# Eingebauter RFID-Leser (WS1850S, I2C 0x28): antwortet, empfängt aber nie eine Chip-Antwort
+# (Test 08.11.2026 mit eigener Routine und mit der M5Stack-Werksfirmware) → Leser defekt (Garantie).
+# Deshalb nicht konfiguriert; Alternative: PN532 am Grove-Port.
+
+display:
+  - platform: mipi_spi
+    id: rund
+    model: GC9A01A
+    cs_pin: GPIO7
+    dc_pin: GPIO4
+    reset_pin: GPIO8
+    invert_colors: true
+
+touchscreen:
+  - platform: ft63x6
+    id: touch
+    interrupt_pin: GPIO14
+    on_release:
+      - if:
+          condition:
+            lambda: 'return id(dunkel) == 2;'
+          then:
+            - script.execute: aufwachen
+          else:
+            - script.execute: aufwachen
+            - if:
+                condition:
+                  lambda: 'return id(wb_menu) >= 0 || id(ac_menu) >= 0 || id(szene_idx) >= 0;'
+                then:
+                  # offenes Menü ohne Änderung schließen
+                  - script.execute: menues_zu
+                  - script.execute: szene_zu
+                else:
+                  - script.execute: naechste_seite
+
+sensor:
+  - platform: wifi_signal
+    id: wlan_signal
+    name: WLAN-Signal
+    update_interval: 60s
+    entity_category: diagnostic
+  - platform: rotary_encoder
+    id: drehgeber
+    pin_a: GPIO40
+    pin_b: GPIO41
+    on_clockwise:
+      - script.execute: { id: drehen, richtung: 1 }
+    on_anticlockwise:
+      - script.execute: { id: drehen, richtung: -1 }
+
+  - platform: homeassistant
+    id: ha_wb_soll
+    entity_id: number.webasto_solltemperatur
+    on_value:
+      # während gerade gedreht wird, nicht vom (alten) HA-Wert überschreiben
+      - if:
+          condition:
+            lambda: 'return !isnan(x) && !id(soll_senden).is_running();'
+          then:
+            - lambda: 'id(wb_soll) = (int) x;'
+            - script.execute: thermo_anzeige
+  - platform: homeassistant
+    id: ha_wb_temp
+    entity_id: sensor.webasto_webasto_temperatur
+    on_value:
+      - lvgl.label.update:
+          id: lbl_raum
+          text: !lambda 'return isnan(x) ? std::string("Raum –") : str_sprintf("Raum %.0f °C", x);'
+
+  - platform: homeassistant
+    id: ha_ac_target
+    entity_id: climate.dometicklima_dometic_freshjet
+    attribute: temperature
+    on_value:
+      - if:
+          condition:
+            lambda: 'return !isnan(x) && !id(ac_soll_senden).is_running();'
+          then:
+            - lambda: 'id(ac_soll) = (int) x;'
+            - script.execute: klima_anzeige
+  - platform: homeassistant
+    id: ha_ac_current
+    entity_id: climate.dometicklima_dometic_freshjet
+    attribute: current_temperature
+    on_value:
+      - lvgl.label.update:
+          id: lbl_ac_raum
+          text: !lambda 'return isnan(x) ? std::string("Raum –") : str_sprintf("Raum %.0f °C", x);'
+
+  - platform: homeassistant
+    id: ha_t_pumpe
+    entity_id: sensor.camper_pumpe_temperatur
+    on_value: [script.execute: warn_pruefen]
+  - platform: homeassistant
+    id: ha_t_tank
+    entity_id: sensor.camper_wassertank_temperatur
+    on_value: [script.execute: warn_pruefen]
+
+  - platform: homeassistant
+    id: ha_bat
+    entity_id: sensor.smartshunt_xxxx_batterie
+    on_value: [script.execute: info_anzeige]
+  - platform: homeassistant
+    id: ha_bat_v
+    entity_id: sensor.smartshunt_xxxx_spannung
+    on_value: [script.execute: info_anzeige]
+  - platform: homeassistant
+    id: ha_frisch
+    entity_id: sensor.vanpi_wasser_frischwasser
+    on_value: [script.execute: info_anzeige]
+  - platform: homeassistant
+    id: ha_grau
+    entity_id: sensor.grauwasser_fuellstand
+    on_value:
+      - script.execute: info_anzeige
+  - platform: homeassistant
+    id: ha_grau_pct
+    entity_id: sensor.grauwasser_fuellstand
+    on_value: [script.execute: wasser_anzeige]
+  - platform: homeassistant
+    id: ha_boeen
+    entity_id: input_number.boen_max_6h
+    on_value: [script.execute: aussen_anzeige]
+  - platform: homeassistant
+    id: ha_windgrenze
+    entity_id: input_number.markise_windgrenze
+    on_value: [script.execute: aussen_anzeige]
+  - platform: homeassistant
+    id: ha_wb_rest
+    entity_id: sensor.webasto_restlaufzeit
+    on_value: [script.execute: thermo_anzeige]
+  - platform: homeassistant
+    id: ha_innen
+    entity_id: sensor.timmerflotte_temp_hmd_sensor_temperatur
+    on_value: [script.execute: info_anzeige]
+  - platform: homeassistant
+    id: ha_aussen
+    entity_id: sensor.camper_aussentemperatur_temperatur
+    on_value:
+      - script.execute: info_anzeige
+      - script.execute: uhr_anzeige
+      - script.execute: aussen_anzeige
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      id: wlan_ip
+      name: IP-Adresse
+      on_value:
+        - logger.log:
+            level: INFO
+            format: "IP-Adresse: %s"
+            args: ['x.c_str()']
+  - platform: homeassistant
+    id: ha_wb_status
+    entity_id: sensor.webasto_webasto_status
+    on_value:
+      - script.execute: thermo_anzeige
+  - platform: homeassistant
+    id: ha_wb_mode
+    entity_id: select.webasto_webasto_heizmodus
+    on_value:
+      - script.execute: thermo_anzeige
+      - if:
+          condition:
+            lambda: 'return id(wb_menu) >= 0;'
+          then: [script.execute: wb_menu_anzeige]
+  - platform: homeassistant
+    id: ha_wb_laufzeit
+    entity_id: input_select.webasto_laufzeit
+    on_value:
+      - script.execute: thermo_anzeige
+      - if:
+          condition:
+            lambda: 'return id(wb_menu) >= 0;'
+          then: [script.execute: wb_menu_anzeige]
+  - platform: homeassistant
+    id: ha_druck
+    entity_id: select.pumpen_bridge_pumpe_druckstufe
+    on_value: [script.execute: wasser_anzeige]
+  - platform: homeassistant
+    id: ha_ventil
+    entity_id: cover.pekaway_van_pi_grauwasser_ventil
+    on_value: [script.execute: wasser_anzeige]
+  - platform: homeassistant
+    id: ha_alarm
+    entity_id: input_select.camper_alarm_modus
+    on_value: [script.execute: info_anzeige]
+  - platform: homeassistant
+    id: ha_ac_state
+    entity_id: climate.dometicklima_dometic_freshjet
+    on_value:
+      - script.execute: klima_anzeige
+
+binary_sensor:
+  - platform: gpio
+    id: knopf
+    pin:
+      number: GPIO42
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 20ms
+    on_multi_click:
+      # Doppeldruck: Szenen
+      - timing:
+          - ON for at most 500ms
+          - OFF for at most 300ms
+          - ON for at most 500ms
+          - OFF for at least 50ms
+        then:
+          - script.execute: doppel_druecken
+      # kurz
+      - timing:
+          - ON for at most 700ms
+          - OFF for at least 300ms
+        then:
+          - script.execute: kurz_druecken
+      # lang: Klima-Modus bzw. zurück zum Thermostat
+      - timing:
+          - ON for at least 900ms
+        then:
+          - script.execute: lang_druecken
+
+  - platform: homeassistant
+    id: w_rauch
+    entity_id: binary_sensor.camper_rauchmelder_rauch
+    trigger_on_initial_state: true
+    on_state: [script.execute: warn_pruefen]
+  - platform: homeassistant
+    id: w_leck_klappe
+    entity_id: binary_sensor.camper_sensor_wasserklappe_wasserleck
+    trigger_on_initial_state: true
+    on_state: [script.execute: warn_pruefen]
+  - platform: homeassistant
+    id: w_leck_wc
+    entity_id: binary_sensor.camper_wc_klappe_wasserleck
+    trigger_on_initial_state: true
+    on_state: [script.execute: warn_pruefen]
+
+  - platform: homeassistant
+    id: ha_pumpe
+    entity_id: switch.pumpen_bridge_wasserpumpe_direkt
+    trigger_on_initial_state: true
+    on_state: [script.execute: wasser_anzeige]
+
+  - platform: homeassistant
+    id: l0
+    entity_id: light.hauptlicht
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+  - platform: homeassistant
+    id: l1
+    entity_id: light.ambiente_licht
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+  - platform: homeassistant
+    id: l2
+    entity_id: light.badlicht
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+  - platform: homeassistant
+    id: l3
+    entity_id: light.tv_ambientelicht
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+  - platform: homeassistant
+    id: l4
+    entity_id: light.markisenlicht
+    trigger_on_initial_state: true
+    on_state:
+      - script.execute: licht_anzeige
+      - script.execute: aussen_anzeige
+  - platform: homeassistant
+    id: l5
+    entity_id: light.aussenlicht
+    trigger_on_initial_state: true
+    on_state:
+      - script.execute: licht_anzeige
+      - script.execute: aussen_anzeige
+  - platform: homeassistant
+    id: l6
+    entity_id: light.dometicklima_freshjet_innenbeleuchtung
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+  - platform: homeassistant
+    id: l7
+    entity_id: light.dometicklima_freshjet_aussenbeleuchtung
+    trigger_on_initial_state: true
+    on_state: [script.execute: licht_anzeige]
+
+interval:
+  # Display dimmen, dann gedimmte Nachtuhr
+  - interval: 1s
+    then:
+      - lambda: |-
+          uint32_t ruhe = millis() - id(letzte_aktion);
+          uint32_t aus = (uint32_t) (id(aus_nach).state * 1000);
+          if (id(dunkel) == 0 && ruhe > aus / 3) {
+            id(dunkel) = 1;
+            auto c = id(backlight).turn_on();
+            c.set_brightness(id(hell_normal).state / 100.0f * 0.3f);
+            c.perform();
+          } else if (id(dunkel) == 1 && ruhe > aus) {
+            id(dunkel) = 2;
+            float h = id(nacht_helligkeit).state;
+            if (h <= 0) {
+              id(backlight).turn_off().perform();
+            } else {
+              auto c = id(backlight).turn_on();
+              c.set_brightness(h / 100.0f);
+              c.perform();
+            }
+          }
+      - if:
+          condition:
+            lambda: 'return id(dunkel) == 2 && id(seite) != -1;'
+          then:
+            - script.execute: menues_zu
+            - lambda: 'id(seite) = -1;'
+            - script.execute: uhr_anzeige
+            - lvgl.page.show: page_uhr
+  # Bögen weich nachlaufen lassen
+  - interval: 25ms
+    then:
+      - lambda: |-
+          auto nach = [](float &ist, float ziel, lv_obj_t *arc) {
+            if (fabsf(ziel - ist) < 0.5f) { if (ist != ziel) { ist = ziel; lv_arc_set_value(arc, (int) ziel); } return; }
+            ist += (ziel - ist) * 0.25f;
+            lv_arc_set_value(arc, (int) lroundf(ist));
+          };
+          nach(id(arc_wb_ist), id(wb_soll) * 10.0f, id(arc_soll));
+          nach(id(arc_ac_ist), id(ac_soll) * 10.0f, id(arc_ac));
+  # Warnring pulsieren lassen
+  - interval: 600ms
+    then:
+      - lambda: |-
+          if (!id(warn_aktiv)) return;
+          id(warn_blink) = !id(warn_blink);
+          lv_obj_set_style_arc_opa(id(arc_warn), id(warn_blink) ? LV_OPA_COVER : LV_OPA_30, LV_PART_INDICATOR);
+  # Verbindung zu HA anzeigen
+  - interval: 5s
+    then:
+      - if:
+          condition: api.connected
+          then:
+            - lvgl.widget.hide: lbl_offline
+          else:
+            - lvgl.widget.show: lbl_offline
+
+script:
+  - id: aufwachen
+    then:
+      - lambda: |-
+          id(letzte_aktion) = millis();
+          if (id(dunkel) != 0) {
+            id(dunkel) = 0;
+            auto c = id(backlight).turn_on();
+            c.set_brightness(id(hell_normal).state / 100.0f);
+            c.perform();
+          }
+      - if:
+          condition:
+            lambda: 'return id(seite) == -1;'
+          then:
+            - lambda: 'id(seite) = 5;'
+            - lvgl.page.show: page_info
+
+  - id: naechste_seite
+    then:
+      - script.execute: menues_zu
+      - lambda: |-
+          // Reihenfolge: Übersicht, Licht, Webasto, Klima, Außen, Grauwasser
+          // (Seitennummern: 0 Webasto, 1 Klima, 2 Licht, 3 Außen, 4 Wasser, 5 Übersicht)
+          static const int folge[] = {5, 2, 0, 1, 3, 4};
+          int pos = 0;
+          for (int i = 0; i < 6; i++) if (folge[i] == id(seite)) pos = i;
+          id(seite) = id(seite) < 0 ? 5 : folge[(pos + 1) % 6];
+      - if:
+          condition:
+            lambda: 'return id(seite) == 0;'
+          then: [lvgl.page.show: page_thermo]
+      - if:
+          condition:
+            lambda: 'return id(seite) == 1;'
+          then: [lvgl.page.show: page_klima]
+      - if:
+          condition:
+            lambda: 'return id(seite) == 2;'
+          then: [lvgl.page.show: page_licht]
+      - if:
+          condition:
+            lambda: 'return id(seite) == 3;'
+          then: [lvgl.page.show: page_aussen]
+      - if:
+          condition:
+            lambda: 'return id(seite) == 4;'
+          then: [lvgl.page.show: page_wasser]
+      - if:
+          condition:
+            lambda: 'return id(seite) == 5;'
+          then: [lvgl.page.show: page_info]
+
+  - id: menues_zu
+    then:
+      - script.execute: ac_menu_zu
+      - lambda: 'id(wb_menu) = -1;'
+      - lvgl.widget.hide: ov_wb_menu
+
+  - id: drehen
+    parameters:
+      richtung: int
+    then:
+      - if:
+          condition:
+            lambda: 'return id(dunkel) == 2;'
+          then:
+            - script.execute: aufwachen
+          else:
+            - script.execute: aufwachen
+            - lambda: |-
+                // schnelles Drehen: doppelte Schritte bei den Temperaturen
+                uint32_t jetzt = millis();
+                id(schritt) = (jetzt - id(letzter_dreh) < 70) ? 2 : 1;
+                id(letzter_dreh) = jetzt;
+            - if:
+                condition:
+                  lambda: 'return id(szene_idx) >= 0;'
+                then:
+                  - lambda: 'id(szene_idx) = (id(szene_idx) + richtung + 3) % 3;'
+                  - script.execute: szene_anzeige
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 0 && id(wb_menu) >= 0;'
+                      then:
+                        - lambda: 'id(wb_menu) = (id(wb_menu) + richtung + 11) % 11;'
+                        - script.execute: wb_menu_anzeige
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 0 && id(wb_menu) < 0;'
+                      then:
+                        - lambda: 'id(wb_soll) = std::max(5, std::min(35, id(wb_soll) + richtung * id(schritt)));'
+                        - script.execute: thermo_anzeige
+                        - script.execute: soll_senden
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 1 && id(ac_menu) >= 0;'
+                      then:
+                        - lambda: 'id(ac_menu) = (id(ac_menu) + richtung + 6) % 6;'
+                        - script.execute: ac_menu_anzeige
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 1 && id(ac_menu) < 0;'
+                      then:
+                        - lambda: 'id(ac_soll) = std::max(16, std::min(31, id(ac_soll) + richtung * id(schritt)));'
+                        - script.execute: klima_anzeige
+                        - script.execute: ac_soll_senden
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 2;'
+                      then:
+                        - lambda: 'id(licht_idx) = (id(licht_idx) + richtung + 9) % 9;'
+                        - script.execute: licht_anzeige
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 3;'
+                      then:
+                        - lambda: 'id(aussen_idx) = 1 - id(aussen_idx);'
+                        - script.execute: aussen_anzeige
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 4;'
+                      then:
+                        - lambda: 'id(wasser_idx) = (id(wasser_idx) + richtung + 3) % 3;'
+                        - script.execute: wasser_anzeige
+
+  - id: soll_senden
+    mode: restart
+    then:
+      - delay: 1500ms
+      - homeassistant.action:
+          action: number.set_value
+          data:
+            entity_id: number.webasto_solltemperatur
+            value: !lambda 'return to_string(id(wb_soll));'
+
+  - id: kurz_druecken
+    then:
+      - if:
+          condition:
+            lambda: 'return id(dunkel) == 2;'
+          then:
+            - script.execute: aufwachen
+          else:
+            - script.execute: aufwachen
+            - if:
+                condition:
+                  lambda: 'return id(szene_idx) >= 0;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(szene_idx) == 0;'
+                      then: [homeassistant.action: { action: script.womo_nacht }]
+                  - if:
+                      condition:
+                        lambda: 'return id(szene_idx) == 1;'
+                      then: [homeassistant.action: { action: script.womo_morgen }]
+                  - if:
+                      condition:
+                        lambda: 'return id(szene_idx) == 2;'
+                      then: [homeassistant.action: { action: script.womo_weg }]
+                  - lvgl.label.update: { id: lbl_szene_hinweis, text: "ausgeführt" }
+                  - delay: 800ms
+                  - script.execute: szene_zu
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 0 && id(wb_menu) >= 0;'
+                      then:
+                        - if:
+                            condition:
+                              lambda: 'return id(wb_menu) < 3;'
+                            then:
+                              - homeassistant.action:
+                                  action: select.select_option
+                                  data:
+                                    entity_id: select.webasto_webasto_heizmodus
+                                    option: !lambda |-
+                                      static const char *m[] = {"Eco", "Normal", "Boost"};
+                                      return std::string(m[id(wb_menu)]);
+                              - lvgl.label.update: { id: lbl_wbm_pos, text: "übernommen" }
+                              - script.execute: wb_menu_timeout
+                        - if:
+                            condition:
+                              lambda: 'return id(wb_menu) >= 3 && id(wb_menu) < 10;'
+                            then:
+                              - homeassistant.action:
+                                  action: input_select.select_option
+                                  data:
+                                    entity_id: input_select.webasto_laufzeit
+                                    option: !lambda |-
+                                      static const char *l[] = {"15 Minuten", "30 Minuten", "45 Minuten", "60 Minuten",
+                                                                "90 Minuten", "120 Minuten", "Unendlich"};
+                                      return std::string(l[id(wb_menu) - 3]);
+                              - lvgl.label.update: { id: lbl_wbm_pos, text: "übernommen" }
+                              - script.execute: wb_menu_timeout
+                        - if:
+                            condition:
+                              lambda: 'return id(wb_menu) == 10;'
+                            then:
+                              - script.execute: menues_zu
+                              - script.execute: webasto_schalten
+                      else:
+                        - if:
+                            condition:
+                              lambda: 'return id(seite) == 0;'
+                            then:
+                              - script.execute: webasto_schalten
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 1 && id(ac_menu) >= 0;'
+                      then:
+                        - homeassistant.action:
+                            action: climate.set_hvac_mode
+                            data:
+                              entity_id: climate.dometicklima_dometic_freshjet
+                              hvac_mode: !lambda |-
+                                static const char *m[] = {"cool", "heat", "fan_only", "heat_cool", "dry", "off"};
+                                return std::string(m[id(ac_menu)]);
+                        - script.execute: ac_menu_zu
+                      else:
+                        - if:
+                            condition:
+                              lambda: 'return id(seite) == 1;'
+                            then:
+                              - lvgl.label.update: { id: lbl_ac_hinweis, text: "schaltet …" }
+                              - homeassistant.action:
+                                  action: climate.toggle
+                                  data:
+                                    entity_id: climate.dometicklima_dometic_freshjet
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 2;'
+                      then:
+                        - if:
+                            condition:
+                              lambda: 'return id(licht_idx) == 8;'
+                            then:
+                              - homeassistant.action:
+                                  action: light.turn_off
+                                  data:
+                                    entity_id: light.hauptlicht, light.ambiente_licht, light.badlicht, light.tv_ambientelicht, light.markisenlicht, light.aussenlicht, light.dometicklima_freshjet_innenbeleuchtung, light.dometicklima_freshjet_aussenbeleuchtung
+                            else:
+                              - homeassistant.action:
+                                  action: light.toggle
+                                  data:
+                                    entity_id: !lambda |-
+                                      static const char *e[] = {"light.hauptlicht", "light.ambiente_licht", "light.badlicht",
+                                                                "light.tv_ambientelicht", "light.markisenlicht", "light.aussenlicht",
+                                                                "light.dometicklima_freshjet_innenbeleuchtung",
+                                                                "light.dometicklima_freshjet_aussenbeleuchtung"};
+                                      return std::string(e[id(licht_idx)]);
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 3;'
+                      then:
+                        - homeassistant.action:
+                            action: light.toggle
+                            data:
+                              entity_id: !lambda 'return id(aussen_idx) == 0 ? std::string("light.markisenlicht") : std::string("light.aussenlicht");'
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 4 && id(wasser_idx) == 0;'
+                      then:
+                        - homeassistant.action:
+                            action: switch.toggle
+                            data:
+                              entity_id: switch.pumpen_bridge_wasserpumpe_direkt
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 4 && id(wasser_idx) == 1;'
+                      then:
+                        # Druckstufe weiterschalten 1 → 2 → 3 → 1
+                        - homeassistant.action:
+                            action: select.select_option
+                            data:
+                              entity_id: select.pumpen_bridge_pumpe_druckstufe
+                              option: !lambda |-
+                                int st = atoi(id(ha_druck).state.c_str());
+                                return to_string(st >= 3 || st < 1 ? 1 : st + 1);
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 4 && id(wasser_idx) == 2;'
+                      then:
+                        - lvgl.label.update: { id: lbl_w_hinweis, text: "Ventil: lang drücken" }
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 5;'
+                      then:
+                        - homeassistant.action:
+                            action: input_select.select_option
+                            data:
+                              entity_id: input_select.camper_alarm_modus
+                              option: !lambda 'return id(ha_alarm).state == "Unscharf" ? std::string("Push und Sirene") : std::string("Unscharf");'
+
+  - id: lang_druecken
+    then:
+      - script.execute: aufwachen
+      - if:
+          condition:
+            lambda: 'return id(wb_menu) >= 0 || id(ac_menu) >= 0 || id(szene_idx) >= 0;'
+          then:
+            # offenes Menü ohne Änderung schließen
+            - script.execute: menues_zu
+            - script.execute: szene_zu
+            - script.stop: lang_druecken
+      - if:
+          condition:
+            lambda: 'return id(seite) == 0 && id(wb_menu) < 0;'
+          then:
+            # Webasto-Menü: aktueller Modus vorgewählt
+            - lambda: |-
+                std::string m = id(ha_wb_mode).state;
+                id(wb_menu) = m == "Eco" ? 0 : (m == "Boost" ? 2 : 1);
+            - lvgl.widget.show: ov_wb_menu
+            - script.execute: wb_menu_anzeige
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(seite) == 1 && id(ac_menu) < 0;'
+                then:
+                  # Klima-Modus-Auswahl, aktueller Modus vorgewählt
+                  - lambda: |-
+                      std::string s = id(ha_ac_state).state;
+                      static const char *m[] = {"cool", "heat", "fan_only", "heat_cool", "dry", "off"};
+                      id(ac_menu) = 0;
+                      for (int i = 0; i < 6; i++) if (s == m[i]) id(ac_menu) = i;
+                  - lvgl.widget.show: ov_ac_menu
+                  - script.execute: ac_menu_anzeige
+                  - script.execute: ac_menu_timeout
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(seite) == 4 && id(wasser_idx) == 2;'
+                      then:
+                        # Grauwasserventil: öffnen bzw. schließen (nur mit langem Druck)
+                        - if:
+                            condition:
+                              lambda: 'return id(ha_ventil).state == "closed";'
+                            then:
+                              - lvgl.label.update: { id: lbl_w_hinweis, text: "Ventil öffnet …" }
+                              - homeassistant.action:
+                                  action: cover.open_cover
+                                  data:
+                                    entity_id: cover.pekaway_van_pi_grauwasser_ventil
+                            else:
+                              - lvgl.label.update: { id: lbl_w_hinweis, text: "Ventil schließt …" }
+                              - homeassistant.action:
+                                  action: cover.close_cover
+                                  data:
+                                    entity_id: cover.pekaway_van_pi_grauwasser_ventil
+                      else:
+                        - script.execute: menues_zu
+                        - lambda: 'id(seite) = 5;'
+                        - lvgl.page.show: page_info
+
+  - id: doppel_druecken
+    then:
+      - if:
+          condition:
+            lambda: 'return id(dunkel) == 2;'
+          then:
+            - script.execute: aufwachen
+          else:
+            - script.execute: aufwachen
+            - script.execute: menues_zu
+            - lambda: |-
+                // Vorauswahl nach Uhrzeit: abends/nachts „Nacht“, morgens „Morgen“
+                auto t = id(ha_time).now();
+                id(szene_idx) = (t.is_valid() && t.hour >= 4 && t.hour < 12) ? 1 : 0;
+            - lvgl.label.update: { id: lbl_szene_hinweis, text: "tippen = zurück" }
+            - lvgl.widget.show: ov_szene
+            - script.execute: szene_anzeige
+
+  - id: szene_zu
+    then:
+      - lambda: 'id(szene_idx) = -1;'
+      - lvgl.widget.hide: ov_szene
+
+  - id: szene_timeout
+    mode: restart
+    then:
+      - delay: 10s
+      - script.execute: szene_zu
+
+  - id: szene_anzeige
+    then:
+      - script.execute: szene_timeout
+      - lambda: |-
+          static const char *namen[] = {"Nacht", "Morgen", "Weg"};
+          static const char *info[] = {"Licht aus · Webasto 16°", "Ambiente an · Webasto an", "alles aus · Wachhund an"};
+          static const char *icons[] = {"\U000F0594", "\U000F059C", "\U000F0F9B"};
+          static const uint32_t farben[] = {0x7C8CF8, 0xF59E0B, 0xEF4444};
+          int i = id(szene_idx) < 0 ? 0 : id(szene_idx);
+          lv_label_set_text(id(lbl_szene_name), namen[i]);
+          lv_label_set_text(id(lbl_szene_info), info[i]);
+          lv_label_set_text(id(lbl_szene_icon), icons[i]);
+          lv_obj_set_style_text_color(id(lbl_szene_icon), lv_color_hex(farben[i]), LV_PART_MAIN);
+
+  - id: webasto_schalten
+    then:
+      - if:
+          condition:
+            lambda: 'return ${laeuft};'
+          then:
+            - lvgl.label.update: { id: lbl_hinweis, text: "stoppt …" }
+            - homeassistant.action: { action: script.webasto_stop }
+          else:
+            - lvgl.label.update: { id: lbl_hinweis, text: "startet …" }
+            # gemerktes Soll zuerst senden, dann Start mit Laufzeit-Timer (wie am Panel)
+            - script.stop: soll_senden
+            - if:
+                condition:
+                  lambda: 'return isnan(id(ha_wb_soll).state) || id(wb_soll) != (int) id(ha_wb_soll).state;'
+                then:
+                  - homeassistant.action:
+                      action: number.set_value
+                      data:
+                        entity_id: number.webasto_solltemperatur
+                        value: !lambda 'return to_string(id(wb_soll));'
+            - homeassistant.action: { action: script.webasto_start_mit_timer }
+
+  - id: thermo_anzeige
+    then:
+      - lvgl.label.update:
+          id: lbl_soll
+          text: !lambda 'return str_sprintf("%d°", id(wb_soll));'
+      - lvgl.label.update:
+          id: lbl_status
+          text: !lambda |-
+            std::string s = id(ha_wb_status).state;
+            if (s.empty() || s == "unavailable" || s == "unknown") return std::string("Webasto –");
+            // Klammerzusatz weglassen, z. B. „Ausglühen (Leistungsregelung)“ → „Ausglühen“
+            auto k = s.find(" (");
+            if (k != std::string::npos && k > 0 && s.rfind("Aus (", 0) != 0) s = s.substr(0, k);
+            return s;
+      - lvgl.label.update:
+          id: lbl_hinweis
+          text: !lambda |-
+            int rest = isnan(id(ha_wb_rest).state) ? 0 : (int) id(ha_wb_rest).state;
+            if (${laeuft}) return rest > 0 ? str_sprintf("noch %d min · Stop", rest) : std::string("drücken = Stop");
+            return std::string("drücken = Start");
+      - lvgl.label.update:
+          id: lbl_wb_modus
+          text: !lambda |-
+            std::string m = id(ha_wb_mode).state, l = id(ha_wb_laufzeit).state;
+            if (m.empty() || m == "unknown" || m == "unavailable") m = "–";
+            if (l == "Unendlich") l = "Dauer";
+            else if (l.size() > 8) l = l.substr(0, l.find(' ')) + " min";
+            return m + " · " + l;
+      - lambda: |-
+          bool an = ${laeuft};
+          lv_color_t c = an ? lv_color_hex(0xF59E0B) : lv_color_hex(0x5A6472);
+          lv_obj_set_style_arc_color(id(arc_soll), c, LV_PART_INDICATOR);
+          lv_obj_set_style_text_color(id(ico_flamme), c, LV_PART_MAIN);
+
+  - id: licht_anzeige
+    then:
+      - lambda: |-
+          static const char *namen[] = {"Hauptlicht", "Ambiente", "Bad", "TV Ambiente", "Markise", "Außen",
+                                        "Klima innen", "Klima außen", "Alle aus"};
+          static const char *icons[] = {"\U000F0335", "\U000F0335", "\U000F09A0", "\U000F1356", "\U000F1B88",
+                                        "\U000F1054", "\U000F001B", "\U000F001B", "\U000F0425"};
+          bool st[8] = {id(l0).state, id(l1).state, id(l2).state, id(l3).state,
+                        id(l4).state, id(l5).state, id(l6).state, id(l7).state};
+          lv_obj_t *dots[9] = {id(dot0), id(dot1), id(dot2), id(dot3), id(dot4), id(dot5), id(dot6), id(dot7), id(dot8)};
+          int an = 0;
+          for (int i = 0; i < 8; i++) if (st[i]) an++;
+          for (int i = 0; i < 9; i++) {
+            uint32_t c = i == 8 ? 0x7A2E33 : (st[i] ? 0xF5C542 : 0x3A414C);
+            lv_obj_set_style_bg_color(dots[i], lv_color_hex(c), LV_PART_MAIN);
+            lv_obj_set_style_border_width(dots[i], i == id(licht_idx) ? 3 : 0, LV_PART_MAIN);
+            int g = i == id(licht_idx) ? 22 : 14;
+            lv_obj_set_size(dots[i], g, g);
+          }
+          int i = id(licht_idx);
+          lv_label_set_text(id(lbl_licht_name), namen[i]);
+          lv_label_set_text(id(lbl_licht_icon), icons[i]);
+          if (i == 8) {
+            lv_label_set_text(id(lbl_licht_state), an == 0 ? "alle aus" : str_sprintf("%d an", an).c_str());
+            lv_obj_set_style_text_color(id(lbl_licht_icon), lv_color_hex(0xEF4444), LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(lbl_licht_state), lv_color_hex(0x9AA4B2), LV_PART_MAIN);
+          } else {
+            lv_label_set_text(id(lbl_licht_state), st[i] ? "an" : "aus");
+            lv_obj_set_style_text_color(id(lbl_licht_icon), st[i] ? lv_color_hex(0xF5C542) : lv_color_hex(0x5A6472), LV_PART_MAIN);
+            lv_obj_set_style_text_color(id(lbl_licht_state), st[i] ? lv_color_hex(0xF5C542) : lv_color_hex(0x9AA4B2), LV_PART_MAIN);
+          }
+  - id: wb_menu_anzeige
+    then:
+      - script.execute: wb_menu_timeout
+      - lambda: |-
+          static const char *namen[] = {"Eco", "Normal", "Boost", "15 min", "30 min", "45 min", "60 min", "90 min", "120 min", "Dauerbetrieb", ""};
+          static const char *werte[] = {"Eco", "Normal", "Boost", "15 Minuten", "30 Minuten", "45 Minuten", "60 Minuten", "90 Minuten", "120 Minuten", "Unendlich", ""};
+          static const char *icons[] = {"\U000F032A", "\U000F0238", "\U000F14DE", "\U000F051B", "\U000F051B", "\U000F051B",
+                                        "\U000F051B", "\U000F051B", "\U000F051B", "\U000F06E4", "\U000F0425"};
+          int i = id(wb_menu) < 0 ? 0 : id(wb_menu);
+          bool laeuft = ${laeuft};
+          lv_label_set_text(id(lbl_wbm_titel), i < 3 ? "Modus" : (i < 10 ? "Laufzeit" : "Heizung"));
+          lv_label_set_text(id(lbl_wbm_name), i == 10 ? (laeuft ? "Stoppen" : "Starten") : namen[i]);
+          lv_label_set_text(id(lbl_wbm_icon), icons[i]);
+          uint32_t farbe = i == 0 ? 0x22C55E : (i == 2 ? 0xEF4444 : (i == 10 ? (laeuft ? 0xEF4444 : 0x22C55E) : 0xF59E0B));
+          lv_obj_set_style_text_color(id(lbl_wbm_icon), lv_color_hex(farbe), LV_PART_MAIN);
+          // aktuell eingestellter Wert wird markiert
+          bool aktiv = (i < 3 && id(ha_wb_mode).state == werte[i]) || (i >= 3 && i < 10 && id(ha_wb_laufzeit).state == werte[i]);
+          lv_label_set_text(id(lbl_wbm_pos), aktiv ? "eingestellt" : str_sprintf("%d / 11", i + 1).c_str());
+          lv_obj_set_style_text_color(id(lbl_wbm_pos), lv_color_hex(aktiv ? 0x22C55E : 0x5A6472), LV_PART_MAIN);
+
+  - id: wb_menu_timeout
+    mode: restart
+    then:
+      - delay: 15s
+      - script.execute: menues_zu
+
+  - id: aussen_anzeige
+    then:
+      - lambda: |-
+          float t = id(ha_aussen).state, b = id(ha_boeen).state, g = id(ha_windgrenze).state;
+          lv_label_set_text(id(lbl_a_temp), isnan(t) ? "–" : str_sprintf("%.0f°", t).c_str());
+          bool wind = !isnan(b) && !isnan(g) && b >= g;
+          lv_label_set_text(id(lbl_a_wind), isnan(b) ? "Böen –" : str_sprintf("Böen 6 h: %.0f km/h", b).c_str());
+          lv_obj_set_style_text_color(id(lbl_a_wind), lv_color_hex(wind ? 0xEF4444 : 0x9AA4B2), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(ico_a_wind), lv_color_hex(wind ? 0xEF4444 : 0x5A6472), LV_PART_MAIN);
+          bool m = id(l4).state, a = id(l5).state;
+          lv_label_set_text(id(lbl_a_markise), m ? "Markise an" : "Markise aus");
+          lv_label_set_text(id(lbl_a_licht), a ? "Außen an" : "Außen aus");
+          lv_obj_set_style_text_color(id(lbl_a_markise), lv_color_hex(m ? 0xF5C542 : 0x9AA4B2), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_a_licht), lv_color_hex(a ? 0xF5C542 : 0x9AA4B2), LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(box_a_markise), id(aussen_idx) == 0 ? 2 : 0, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(box_a_licht), id(aussen_idx) == 1 ? 2 : 0, LV_PART_MAIN);
+
+  - id: wasser_anzeige
+    then:
+      - lambda: |-
+          float g = id(ha_grau_pct).state;
+          int gi = isnan(g) ? 0 : (int) g;
+          lv_arc_set_value(id(arc_grau), gi);
+          lv_obj_set_style_arc_color(id(arc_grau), lv_color_hex(gi >= 80 ? 0xEF4444 : (gi >= 60 ? 0xF59E0B : 0x3B8EE8)), LV_PART_INDICATOR);
+          lv_label_set_text(id(lbl_w_grau), isnan(g) ? "–" : str_sprintf("%d%%", gi).c_str());
+          std::string v = id(ha_ventil).state;
+          const char *vt = v == "closed" ? "Ventil zu" : v == "open" ? "Ventil offen" : v == "opening" ? "öffnet …" : v == "closing" ? "schließt …" : "Ventil –";
+          lv_label_set_text(id(lbl_w_ventil), vt);
+          lv_obj_set_style_text_color(id(lbl_w_ventil), lv_color_hex(v == "closed" ? 0x9AA4B2 : 0xF59E0B), LV_PART_MAIN);
+          bool p = id(ha_pumpe).state;
+          lv_label_set_text(id(lbl_w_pumpe), p ? "Pumpe an" : "Pumpe aus");
+          lv_obj_set_style_text_color(id(lbl_w_pumpe), lv_color_hex(p ? 0x3B8EE8 : 0x9AA4B2), LV_PART_MAIN);
+          std::string d = id(ha_druck).state;
+          lv_label_set_text(id(lbl_w_druck), (d.empty() || d == "unknown" || d == "unavailable") ? "Druck –" : ("Druck " + d).c_str());
+          lv_obj_set_style_border_width(id(box_w_pumpe), id(wasser_idx) == 0 ? 2 : 0, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(box_w_druck), id(wasser_idx) == 1 ? 2 : 0, LV_PART_MAIN);
+          lv_obj_set_style_border_width(id(box_w_ventil), id(wasser_idx) == 2 ? 2 : 0, LV_PART_MAIN);
+          static const char *hinweis[] = {"drücken = Pumpe", "drücken = Druckstufe", "lang drücken = Ventil"};
+          lv_label_set_text(id(lbl_w_hinweis), hinweis[id(wasser_idx)]);
+
+  - id: ac_soll_senden
+    mode: restart
+    then:
+      - delay: 1500ms
+      - homeassistant.action:
+          action: climate.set_temperature
+          data:
+            entity_id: climate.dometicklima_dometic_freshjet
+            temperature: !lambda 'return to_string(id(ac_soll));'
+
+  - id: ac_menu_zu
+    then:
+      - lambda: 'id(ac_menu) = -1;'
+      - lvgl.widget.hide: ov_ac_menu
+
+  - id: ac_menu_timeout
+    mode: restart
+    then:
+      - delay: 15s
+      - script.execute: ac_menu_zu
+
+  - id: ac_menu_anzeige
+    then:
+      - script.execute: ac_menu_timeout
+      - lambda: |-
+          static const char *namen[] = {"Kühlen", "Heizen", "Lüften", "Auto", "Entfeuchten", "Aus"};
+          static const char *icons[] = {"\U000F0717", "\U000F0238", "\U000F0210", "\U000F1B17", "\U000F058E", "\U000F0425"};
+          static const uint32_t farben[] = {0x3B8EE8, 0xF59E0B, 0x22C55E, 0x22C55E, 0x5DCAA5, 0x9AA4B2};
+          int i = id(ac_menu) < 0 ? 0 : id(ac_menu);
+          lv_label_set_text(id(lbl_acm_name), namen[i]);
+          lv_label_set_text(id(lbl_acm_icon), icons[i]);
+          lv_obj_set_style_text_color(id(lbl_acm_icon), lv_color_hex(farben[i]), LV_PART_MAIN);
+          lv_label_set_text(id(lbl_acm_pos), str_sprintf("%d / 6", i + 1).c_str());
+
+  - id: klima_anzeige
+    then:
+      - lvgl.label.update:
+          id: lbl_ac_soll
+          text: !lambda 'return str_sprintf("%d°", id(ac_soll));'
+      - lambda: |-
+          std::string s = id(ha_ac_state).state;
+          const char *txt = "Klima –";
+          uint32_t c = 0x5A6472;
+          if (s == "off") { txt = "Klima aus"; }
+          else if (s == "cool") { txt = "Kühlen"; c = 0x3B8EE8; }
+          else if (s == "heat") { txt = "Heizen"; c = 0xF59E0B; }
+          else if (s == "fan_only") { txt = "Lüften"; c = 0x22C55E; }
+          else if (s == "heat_cool") { txt = "Auto"; c = 0x22C55E; }
+          else if (s == "dry") { txt = "Entfeuchten"; c = 0x5DCAA5; }
+          else if (s == "unavailable") { txt = "nicht verfügbar"; }
+          lv_label_set_text(id(lbl_ac_status), txt);
+          lv_obj_set_style_arc_color(id(arc_ac), lv_color_hex(c), LV_PART_INDICATOR);
+          lv_obj_set_style_text_color(id(ico_ac), lv_color_hex(c), LV_PART_MAIN);
+          bool an = s != "off" && s != "unavailable" && s != "unknown" && !s.empty();
+          lv_label_set_text(id(lbl_ac_hinweis), an ? "drücken = Aus" : "drücken = Ein");
+
+  - id: uhr_anzeige
+    then:
+      - lambda: |-
+          auto t = id(ha_time).now();
+          std::string u = t.is_valid() ? t.strftime("%H:%M") : std::string("--:--");
+          lv_label_set_text(id(lbl_uhr), u.c_str());
+          lv_label_set_text(id(lbl_nacht_uhr), u.c_str());
+          float a = id(ha_aussen).state;
+          lv_label_set_text(id(lbl_nacht_temp), isnan(a) ? "außen –" : str_sprintf("außen %.0f°", a).c_str());
+
+  # Warnungen: Rauch, Wasserleck, Frost an Pumpe/Tank
+  - id: warn_pruefen
+    then:
+      - lambda: |-
+          std::string w;
+          auto add = [&](const char *s) { if (!w.empty()) w += " · "; w += s; };
+          if (id(w_rauch).state) add("RAUCH");
+          if (id(w_leck_klappe).state || id(w_leck_wc).state) add("Wasserleck");
+          float tp = id(ha_t_pumpe).state, tt = id(ha_t_tank).state;
+          if ((!isnan(tp) && tp < 3) || (!isnan(tt) && tt < 3)) add("Frost Wasser");
+          bool neu = !w.empty() && !id(warn_aktiv);
+          id(warn_aktiv) = !w.empty();
+          lv_label_set_text(id(lbl_nacht_warn), w.c_str());
+          if (id(warn_aktiv)) {
+            lv_obj_clear_flag(id(arc_warn), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_add_flag(id(arc_warn), LV_OBJ_FLAG_HIDDEN);
+          }
+          // bei Rauch Display hell machen
+          if (neu && id(w_rauch).state && id(dunkel) != 0) {
+            auto c = id(backlight).turn_on();
+            c.set_brightness(1.0f);
+            c.perform();
+          }
+
+  - id: info_anzeige
+    then:
+      - lambda: |-
+          auto komma = [](std::string s) { for (auto &ch : s) if (ch == '.') ch = ','; return s; };
+          float b = id(ha_bat).state, v = id(ha_bat_v).state;
+          std::string t = isnan(b) ? std::string("–") : str_sprintf("%.0f %%", b);
+          if (!isnan(v)) t += komma(str_sprintf(" · %.1f V", v));
+          lv_label_set_text(id(lbl_i_bat), t.c_str());
+          float f = id(ha_frisch).state, g = id(ha_grau).state;
+          lv_label_set_text(id(lbl_i_frisch), isnan(f) ? "Frisch –" : str_sprintf("Frisch %.0f %%", f).c_str());
+          lv_label_set_text(id(lbl_i_grau), isnan(g) ? "Grau –" : str_sprintf("Grau %.0f %%", g).c_str());
+          float ti = id(ha_innen).state, ta = id(ha_aussen).state;
+          std::string tt = isnan(ti) ? std::string("innen –") : str_sprintf("innen %.0f°", ti);
+          tt += isnan(ta) ? std::string(" · außen –") : str_sprintf(" · außen %.0f°", ta);
+          lv_label_set_text(id(lbl_i_temp), tt.c_str());
+          std::string al = id(ha_alarm).state;
+          bool scharf = !al.empty() && al != "Unscharf" && al != "unknown" && al != "unavailable";
+          lv_label_set_text(id(lbl_i_wach), scharf ? "Wachhund scharf" : "Wachhund aus");
+          lv_obj_set_style_text_color(id(lbl_i_wach), lv_color_hex(scharf ? 0xEF4444 : 0x9AA4B2), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(ico_i_wach), lv_color_hex(scharf ? 0xEF4444 : 0x22C55E), LV_PART_MAIN);
+
+image:
+  - file: bfvl-dial-splash.svg
+    id: img_logo
+    type: RGB565
+    resize: 240x240
+
+font:
+  - file: { type: gfonts, family: Roboto, weight: 500 }
+    id: f_big
+    size: 72
+    bpp: 8
+    glyphs: "0123456789°–-:%"
+  - file: { type: gfonts, family: Roboto, weight: 500 }
+    id: f_m
+    size: 22
+    bpp: 8
+    glyphs: "${glyphs}"
+  - file: { type: gfonts, family: Roboto }
+    id: f_s
+    size: 17
+    bpp: 8
+    glyphs: "${glyphs}"
+  - file:
+      type: web
+      url: https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf
+    id: f_icon
+    size: 56
+    bpp: 8
+    glyphs: ["\U000F0335", "\U000F09A0", "\U000F1356", "\U000F1B88", "\U000F1054",
+             "\U000F0717", "\U000F0238", "\U000F0210", "\U000F1B17", "\U000F058E", "\U000F0425", "\U000F001B",
+             "\U000F0594", "\U000F059C", "\U000F0F9B", "\U000F032A", "\U000F14DE", "\U000F051B", "\U000F06E4"]
+  - file:
+      type: web
+      url: https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf
+    id: f_icon_s
+    size: 24
+    bpp: 8
+    glyphs: ["\U000F0238", "\U000F0079", "\U000F058C", "\U000F0E0A", "\U000F050F", "\U000F001B", "\U000F0594",
+             "\U000F068A", "\U000F058F", "\U000F1066", "\U000F059D", "\U000F1B88", "\U000F1054", "\U000F029A"]
+
+lvgl:
+  displays: [rund]
+  buffer_size: 25%
+  bg_color: 0x111418
+  default_font: f_s
+  theme:
+    label:
+      text_color: 0xF2F4F7
+  top_layer:
+    widgets:
+      - arc:
+          id: arc_warn
+          hidden: true
+          align: CENTER
+          width: 240
+          height: 240
+          min_value: 0
+          max_value: 100
+          value: 100
+          start_angle: 0
+          end_angle: 360
+          rotation: 0
+          adjustable: false
+          clickable: false
+          arc_width: 8
+          arc_opa: TRANSP
+          indicator:
+            arc_width: 8
+            arc_color: 0xEF4444
+          knob:
+            bg_opa: TRANSP
+            pad_all: 0
+      - obj:
+          id: ov_szene
+          hidden: true
+          align: CENTER
+          width: 232
+          height: 232
+          radius: 116
+          bg_color: 0x111418
+          bg_opa: COVER
+          border_color: 0x2B3340
+          border_width: 2
+          pad_all: 0
+          clickable: false
+          scrollable: false
+          widgets:
+            - label: { align: CENTER, y: -80, text: "Szene", text_font: f_s, text_color: 0x9AA4B2 }
+            - label: { id: lbl_szene_icon, align: CENTER, y: -30, text: "\U000F0594", text_font: f_icon, text_color: 0x7C8CF8 }
+            - label: { id: lbl_szene_name, align: CENTER, y: 22, text: "Nacht", text_font: f_m, text_color: 0xF2F4F7 }
+            - label: { id: lbl_szene_info, align: CENTER, y: 50, text: "", text_font: f_s, text_color: 0x9AA4B2 }
+            - label: { id: lbl_szene_hinweis, align: CENTER, y: 82, text: "tippen = zurück", text_font: f_s, text_color: 0x5A6472 }
+      - label:
+          id: lbl_offline
+          hidden: true
+          align: BOTTOM_MID
+          y: -14
+          text: "keine Verbindung"
+          text_font: f_s
+          text_color: 0xEF4444
+  pages:
+    - id: page_logo
+      bg_color: 0x000000
+      widgets:
+        - image: { src: img_logo, align: CENTER }
+
+    - id: page_thermo
+      bg_color: 0x111418
+      widgets:
+        - arc:
+            id: arc_soll
+            align: CENTER
+            width: 228
+            height: 228
+            min_value: 50
+            max_value: 350
+            value: 200
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            clickable: false
+            arc_width: 14
+            arc_color: 0x262B33
+            arc_rounded: true
+            indicator:
+              arc_width: 14
+              arc_color: 0x5A6472
+              arc_rounded: true
+            knob:
+              bg_opa: TRANSP
+              pad_all: 0
+        - label:
+            id: lbl_status
+            align: CENTER
+            y: -64
+            width: 150
+            long_mode: dot
+            text_align: CENTER
+            text: "Webasto –"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        - label:
+            id: lbl_soll
+            align: CENTER
+            y: -14
+            text: "–"
+            text_font: f_big
+            text_color: 0xF2F4F7
+        - label:
+            id: lbl_wb_modus
+            align: CENTER
+            y: 54
+            text: "–"
+            text_font: f_s
+            text_color: 0x5A6472
+        - label:
+            id: lbl_raum
+            align: CENTER
+            y: 32
+            text: "Raum –"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        - label:
+            id: ico_flamme
+            align: CENTER
+            y: -90
+            text: "\U000F0238"
+            text_font: f_icon_s
+            text_color: 0x5A6472
+        - label:
+            id: lbl_hinweis
+            align: CENTER
+            y: 88
+            text: "drücken = Start"
+            text_font: f_s
+            text_color: 0x9AA4B2
+
+        # Webasto-Menü (lang drücken): Modus und Laufzeit
+        - obj:
+            id: ov_wb_menu
+            hidden: true
+            align: CENTER
+            width: 240
+            height: 240
+            radius: 120
+            bg_color: 0x111418
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { id: lbl_wbm_titel, align: CENTER, y: -78, text: "Modus", text_font: f_s, text_color: 0x9AA4B2 }
+              - label: { id: lbl_wbm_icon, align: CENTER, y: -22, text: "\U000F0238", text_font: f_icon, text_color: 0xF59E0B }
+              - label: { id: lbl_wbm_name, align: CENTER, y: 30, text: "Normal", text_font: f_m, text_color: 0xF2F4F7 }
+              - label: { id: lbl_wbm_pos, align: CENTER, y: 58, text: "2 / 11", text_font: f_s, text_color: 0x5A6472 }
+              - label: { align: CENTER, y: 92, text: "tippen = zurück", text_font: f_s, text_color: 0x5A6472 }
+
+    - id: page_klima
+      bg_color: 0x111418
+      widgets:
+        - arc:
+            id: arc_ac
+            align: CENTER
+            width: 228
+            height: 228
+            min_value: 160
+            max_value: 310
+            value: 220
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            clickable: false
+            arc_width: 14
+            arc_color: 0x262B33
+            arc_rounded: true
+            indicator:
+              arc_width: 14
+              arc_color: 0x5A6472
+              arc_rounded: true
+            knob:
+              bg_opa: TRANSP
+              pad_all: 0
+        - label:
+            id: lbl_ac_status
+            align: CENTER
+            y: -64
+            width: 150
+            long_mode: dot
+            text_align: CENTER
+            text: "Klima –"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        - label:
+            id: lbl_ac_soll
+            align: CENTER
+            y: -6
+            text: "–"
+            text_font: f_big
+            text_color: 0xF2F4F7
+        - label:
+            id: lbl_ac_raum
+            align: CENTER
+            y: 42
+            text: "Raum –"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        - label:
+            id: ico_ac
+            align: CENTER
+            y: 74
+            text: "\U000F001B"
+            text_font: f_icon_s
+            text_color: 0x5A6472
+        - label:
+            id: lbl_ac_hinweis
+            align: CENTER
+            y: 100
+            text: "drücken = Ein"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        # Modus-Auswahl (lang drücken), drehen wählt, drücken übernimmt
+        - obj:
+            id: ov_ac_menu
+            hidden: true
+            align: CENTER
+            width: 240
+            height: 240
+            radius: 120
+            bg_color: 0x111418
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: CENTER, y: -78, text: "Modus", text_font: f_s, text_color: 0x9AA4B2 }
+              - label: { id: lbl_acm_icon, align: CENTER, y: -22, text: "\U000F0717", text_font: f_icon, text_color: 0x3B8EE8 }
+              - label: { id: lbl_acm_name, align: CENTER, y: 30, text: "Kühlen", text_font: f_m, text_color: 0xF2F4F7 }
+              - label: { id: lbl_acm_pos, align: CENTER, y: 58, text: "1 / 6", text_font: f_s, text_color: 0x5A6472 }
+              - label: { align: CENTER, y: 92, text: "tippen = zurück", text_font: f_s, text_color: 0x5A6472 }
+
+    - id: page_uhr
+      bg_color: 0x000000
+      widgets:
+        - label:
+            id: lbl_nacht_uhr
+            align: CENTER
+            y: -8
+            text: "--:--"
+            text_font: f_big
+            text_color: 0xF59E0B
+        - label:
+            id: lbl_nacht_temp
+            align: CENTER
+            y: 42
+            text: "außen –"
+            text_font: f_s
+            text_color: 0xB4690E
+        - label:
+            align: CENTER
+            y: -62
+            text: "\U000F0594"
+            text_font: f_icon_s
+            text_color: 0x6B4510
+        - label:
+            id: lbl_nacht_warn
+            align: CENTER
+            y: 74
+            text: ""
+            text_font: f_m
+            text_color: 0xEF4444
+
+    - id: page_licht
+      bg_color: 0x111418
+      widgets:
+        - obj: { id: dot0, align: CENTER, x: -98, y: 36, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot1, align: CENTER, x: -103, y: -14, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot2, align: CENTER, x: -85, y: -60, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot3, align: CENTER, x: -48, y: -92, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot4, align: CENTER, x: 0, y: -104, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot5, align: CENTER, x: 48, y: -92, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot6, align: CENTER, x: 85, y: -60, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot7, align: CENTER, x: 103, y: -14, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - obj: { id: dot8, align: CENTER, x: 98, y: 36, width: 14, height: 14, radius: 11, bg_color: 0x3A414C, border_color: 0xF2F4F7, border_width: 0, pad_all: 0, clickable: false, scrollable: false }
+        - label:
+            id: lbl_licht_icon
+            align: CENTER
+            y: -18
+            text: "\U000F0335"
+            text_font: f_icon
+            text_color: 0x5A6472
+        - label:
+            id: lbl_licht_name
+            align: CENTER
+            y: 32
+            text: "Hauptlicht"
+            text_font: f_m
+            text_color: 0xF2F4F7
+        - label:
+            id: lbl_licht_state
+            align: CENTER
+            y: 58
+            text: "–"
+            text_font: f_s
+            text_color: 0x9AA4B2
+        - label:
+            align: CENTER
+            y: 92
+            text: "drehen · drücken"
+            text_font: f_s
+            text_color: 0x5A6472
+
+    - id: page_aussen
+      bg_color: 0x111418
+      widgets:
+        - label: { align: CENTER, y: -92, text: "Außen", text_font: f_s, text_color: 0x5A6472 }
+        - label: { id: lbl_a_temp, align: CENTER, y: -50, text: "–", text_font: f_big, text_color: 0xF2F4F7 }
+        - label: { id: ico_a_wind, align: CENTER, x: -78, y: -4, text: "\U000F059D", text_font: f_icon_s, text_color: 0x5A6472 }
+        - label: { id: lbl_a_wind, align: CENTER, x: 14, y: -4, text: "Böen –", text_font: f_s, text_color: 0x9AA4B2 }
+        - obj:
+            id: box_a_markise
+            align: CENTER
+            y: 36
+            width: 176
+            height: 36
+            radius: 18
+            bg_color: 0x1E232A
+            bg_opa: COVER
+            border_color: 0xF2F4F7
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, x: 12, text: "\U000F1B88", text_font: f_icon_s, text_color: 0xF5C542 }
+              - label: { id: lbl_a_markise, align: LEFT_MID, x: 44, text: "Markise", text_font: f_s, text_color: 0x9AA4B2 }
+        - obj:
+            id: box_a_licht
+            align: CENTER
+            y: 78
+            width: 176
+            height: 36
+            radius: 18
+            bg_color: 0x1E232A
+            bg_opa: COVER
+            border_color: 0xF2F4F7
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, x: 12, text: "\U000F1054", text_font: f_icon_s, text_color: 0xF5C542 }
+              - label: { id: lbl_a_licht, align: LEFT_MID, x: 44, text: "Außen", text_font: f_s, text_color: 0x9AA4B2 }
+
+    - id: page_wasser
+      bg_color: 0x111418
+      widgets:
+        - arc:
+            id: arc_grau
+            align: CENTER
+            width: 228
+            height: 228
+            min_value: 0
+            max_value: 100
+            value: 0
+            start_angle: 135
+            end_angle: 45
+            adjustable: false
+            clickable: false
+            arc_width: 12
+            arc_color: 0x262B33
+            arc_rounded: true
+            indicator:
+              arc_width: 12
+              arc_color: 0x3B8EE8
+              arc_rounded: true
+            knob:
+              bg_opa: TRANSP
+              pad_all: 0
+        - label: { align: CENTER, y: -78, text: "Grauwasser", text_font: f_s, text_color: 0x9AA4B2 }
+        - label: { id: lbl_w_grau, align: CENTER, y: -36, text: "–", text_font: f_big, text_color: 0xF2F4F7 }
+        - obj:
+            id: box_w_pumpe
+            align: CENTER
+            y: 10
+            width: 176
+            height: 30
+            radius: 15
+            bg_color: 0x1E232A
+            bg_opa: COVER
+            border_color: 0xF2F4F7
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, x: 12, text: "\U000F058F", text_font: f_icon_s, text_color: 0x3B8EE8 }
+              - label: { id: lbl_w_pumpe, align: LEFT_MID, x: 44, text: "Pumpe", text_font: f_s, text_color: 0x9AA4B2 }
+        - obj:
+            id: box_w_druck
+            align: CENTER
+            y: 42
+            width: 176
+            height: 30
+            radius: 15
+            bg_color: 0x1E232A
+            bg_opa: COVER
+            border_color: 0xF2F4F7
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, x: 12, text: "\U000F029A", text_font: f_icon_s, text_color: 0x5DCAA5 }
+              - label: { id: lbl_w_druck, align: LEFT_MID, x: 44, text: "Druck –", text_font: f_s, text_color: 0x9AA4B2 }
+        - obj:
+            id: box_w_ventil
+            align: CENTER
+            y: 74
+            width: 176
+            height: 30
+            radius: 15
+            bg_color: 0x1E232A
+            bg_opa: COVER
+            border_color: 0xF2F4F7
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, x: 12, text: "\U000F1066", text_font: f_icon_s, text_color: 0xF59E0B }
+              - label: { id: lbl_w_ventil, align: LEFT_MID, x: 44, text: "Ventil", text_font: f_s, text_color: 0x9AA4B2 }
+        - label: { id: lbl_w_hinweis, align: CENTER, y: 102, text: "", text_font: f_s, text_color: 0x5A6472 }
+
+    - id: page_info
+      bg_color: 0x111418
+      widgets:
+        - label:
+            id: lbl_uhr
+            align: CENTER
+            y: -92
+            text: "--:--"
+            text_font: f_m
+            text_color: 0xF2F4F7
+        - obj:
+            align: CENTER
+            y: -54
+            width: 196
+            height: 32
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, text: "\U000F0079", text_font: f_icon_s, text_color: 0x22C55E }
+              - label: { id: lbl_i_bat, align: LEFT_MID, x: 34, text: "–", text_font: f_s, text_color: 0xF2F4F7 }
+        - obj:
+            align: CENTER
+            y: -20
+            width: 196
+            height: 32
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, text: "\U000F058C", text_font: f_icon_s, text_color: 0x3B8EE8 }
+              - label: { id: lbl_i_frisch, align: LEFT_MID, x: 34, text: "Frisch –", text_font: f_s, text_color: 0xF2F4F7 }
+        - obj:
+            align: CENTER
+            y: 14
+            width: 196
+            height: 32
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, text: "\U000F0E0A", text_font: f_icon_s, text_color: 0x9AA4B2 }
+              - label: { id: lbl_i_grau, align: LEFT_MID, x: 34, text: "Grau –", text_font: f_s, text_color: 0xF2F4F7 }
+        - obj:
+            align: CENTER
+            y: 48
+            width: 196
+            height: 32
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { align: LEFT_MID, text: "\U000F050F", text_font: f_icon_s, text_color: 0xF59E0B }
+              - label: { id: lbl_i_temp, align: LEFT_MID, x: 34, text: "–", text_font: f_s, text_color: 0xF2F4F7 }
+        - obj:
+            align: CENTER
+            y: 82
+            width: 176
+            height: 30
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            clickable: false
+            scrollable: false
+            widgets:
+              - label: { id: ico_i_wach, align: LEFT_MID, x: 10, text: "\U000F068A", text_font: f_icon_s, text_color: 0x22C55E }
+              - label: { id: lbl_i_wach, align: LEFT_MID, x: 42, text: "Wachhund –", text_font: f_s, text_color: 0x9AA4B2 }
