@@ -37,13 +37,26 @@ Byte 0–8 wie oben, danach Nullen bis Byte 58, Byte 59 = Summe aller vorherigen
 | `0x41` | an, Stufe 2 |
 | `0x61` | an, Stufe 3 |
 
-**Antworten:** `55` als Quittung, danach Status `aa 45 MODE 00 00 00 83 00 00 00 12 01 a0 … 13 05` – Byte 2 ist der aktuelle MODE.
+**Antworten:** `55` als Quittung, danach die Statusantwort `aa 45 MODE …` – **150 Byte, alle ~2 s**, solange die Pumpe Strom hat. Entschlüsselt mit einem Zapftest (5 l, Werte Ruhe → Zapfen):
+
+| Byte | Bedeutung | Beispiel |
+|---|---|---|
+| 2 | MODE; zusätzlich Bit 4 = Motor läuft | `0x21` → `0x31` |
+| 6 | Spannung × 10 (V) | 131 → 129 |
+| 8 | Strom × 10 (A) | 0 → 22 |
+| 10–11 | Wasserdruck × 100 (bar), Little Endian | 326 → 184 |
+| 14 | Durchfluss × 10 (l/min) | 0 → 39 |
+| 16–17 | Liter heute | 0 → 5 |
+| 18 | Temperatur °C (steigt beim Pumpen – eher Pumpe als Wasser) | 22 → 28 |
+| 101–102, 119–120 | zwei Mengenzähler × 10 (l) – Tages- bzw. Gesamtdurchfluss der App | 0 → 50 |
+| 12, 19, 121, 127 | konstant (210, 5, 20, 20) – vermutlich Einstellwerte bzw. Status, offen | |
+| 149 | Prüfsumme | |
 
 ## ESPHome-Bridge
 
 [`carawater-bridge.yaml`](carawater-bridge.yaml) für einen normalen **ESP32** (getestet mit ESP32-D0WD-V3, 4 MB):
 - `ble_client` zur Pumpe, Statusabfrage alle 10 s
-- Home Assistant: Schalter **„Wasserpumpe direkt“**, Auswahl **„Pumpe Druckstufe“** (1–3), Verbindungsstatus, Bluetooth-Signal, Neustart-Grund
+- Home Assistant: Schalter **„Wasserpumpe direkt“**, Auswahl **„Pumpe Druckstufe“** (1–3), **Spannung, Strom, Wasserdruck, Durchfluss, Liter heute, zwei Mengenzähler, Temperatur, „Pumpe läuft“** (gefiltert, max. 1×/min bzw. bei Änderung), Verbindungsstatus, Bluetooth-Signal, Neustart-Grund; Rohdaten-Sensor (Hex) standardmäßig deaktiviert
 - zusätzlich **Bluetooth-Proxy** für andere BLE-Geräte
 
 Anpassen: MAC-Adresse der Pumpe (`pumpe_mac`), WLAN in `secrets.yaml`, API-Schlüssel.
@@ -83,11 +96,11 @@ The pump advertises as `ISP_xx_xxxx`, service **`FF00`** ("BLE UART"):
 
 **MODE:** bit 0 = pump on, bits 5–6 = pressure level: `0x20` off, `0x21` on/level 1, `0x41` on/level 2, `0x61` on/level 3.
 
-**Responses:** `55` as acknowledge, then status `aa 45 MODE …` – byte 2 is the current MODE.
+**Responses:** `55` as acknowledge, then the status frame `aa 45 MODE …` – **150 bytes every ~2 s** while the pump is powered. Decoded (see table above): byte 2 MODE (+ bit 4 = motor running), 6 voltage ×10, 8 current ×10, 10–11 pressure ×100 bar (little endian), 14 flow ×10 l/min, 16–17 litres today, 18 temperature °C (rises while pumping), 101–102 / 119–120 two volume counters ×10 l (daily/total), 149 checksum.
 
 ### ESPHome bridge
 
-[`carawater-bridge.yaml`](carawater-bridge.yaml) for a plain **ESP32**: `ble_client` to the pump, status poll every 10 s; Home Assistant gets a **switch**, a **pressure select** (1–3), connection status, BLE RSSI, reset reason; plus a **Bluetooth proxy**. Adjust the pump MAC (`pumpe_mac`), Wi-Fi in `secrets.yaml` and the API key.
+[`carawater-bridge.yaml`](carawater-bridge.yaml) for a plain **ESP32**: `ble_client` to the pump, status poll every 10 s; Home Assistant gets a **switch**, a **pressure select** (1–3), **voltage, current, water pressure, flow, litres today, two volume counters, temperature, running state**, connection status, BLE RSSI, reset reason; plus a **Bluetooth proxy**. Adjust the pump MAC (`pumpe_mac`), Wi-Fi in `secrets.yaml` and the API key.
 
 ### Pitfalls
 

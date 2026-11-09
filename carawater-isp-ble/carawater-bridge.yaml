@@ -63,6 +63,11 @@ globals:
   - id: letzte_stufe
     type: int
     initial_value: "0"
+  # Statusantwort kommt ggf. in BLE-Stücken (20 Byte) – hier zusammensetzen
+  - id: puffer
+    type: std::vector<uint8_t>
+  - id: letzte_roh
+    type: std::string
 
 script:
   # Abfrage/Keepalive wie die App: 55 MM HH WT CS
@@ -121,6 +126,35 @@ sensor:
     characteristic_uuid: ${chr_notify}
     notify: true
     lambda: |-
+      // Rohdaten sammeln: neue Statusantwort beginnt mit aa 45, Folgestücke anhängen
+      bool anfang = x.size() >= 2 && x[0] == 0xaa && x[1] == 0x45;
+      if (anfang) id(puffer).clear();
+      if (anfang || !id(puffer).empty()) {
+        id(puffer).insert(id(puffer).end(), x.begin(), x.end());
+        if (id(puffer).size() >= 60 || x.size() < 20) {
+          std::string hex;
+          char b[4];
+          for (auto c : id(puffer)) { snprintf(b, sizeof(b), "%02x", c); hex += b; }
+          if (hex != id(letzte_roh)) {
+            id(letzte_roh) = hex;
+            ESP_LOGD("pumpe", "Status roh (%u): %s", (unsigned) id(puffer).size(), hex.c_str());
+            id(pumpe_roh).publish_state(hex);
+          }
+          id(puffer).clear();
+        }
+      }
+      // Messwerte (entschlüsselt 09.11.2026, Zapftest 5 l): siehe README.md
+      if (x.size() >= 122 && x[0] == 0xaa && x[1] == 0x45) {
+        id(pumpe_laeuft).publish_state(x[2] & 0x10);
+        id(pumpe_spannung).publish_state(x[6] / 10.0f);
+        id(pumpe_strom).publish_state(x[8] / 10.0f);
+        id(pumpe_druck).publish_state((x[10] | (x[11] << 8)) / 100.0f);
+        id(pumpe_durchfluss).publish_state(x[14] / 10.0f);
+        id(pumpe_liter_heute).publish_state((float) (x[16] | (x[17] << 8)));
+        id(pumpe_temperatur).publish_state((float) x[18]);
+        id(pumpe_zaehler_a).publish_state((x[101] | (x[102] << 8)) / 10.0f);
+        id(pumpe_zaehler_b).publish_state((x[119] | (x[120] << 8)) / 10.0f);
+      }
       if (x.size() >= 3 && x[0] == 0xaa && x[1] == 0x45) {
         if (x[2] != id(modus)) ESP_LOGI("pumpe", "Status: Modus 0x%02X", x[2]);
         id(modus) = x[2];
@@ -133,6 +167,79 @@ sensor:
         return (float) x[2];
       }
       return {};
+  # Messwerte aus der Statusantwort (Pumpe sendet alle ~2 s, solange sie Strom hat)
+  - platform: template
+    id: pumpe_spannung
+    name: Pumpe Spannung
+    unit_of_measurement: V
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - or: [throttle: 60s, delta: 0.3]
+  - platform: template
+    id: pumpe_strom
+    name: Pumpe Strom
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - or: [throttle: 60s, delta: 0.5]
+  - platform: template
+    id: pumpe_druck
+    name: Wasserdruck
+    unit_of_measurement: bar
+    device_class: pressure
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - or: [throttle: 60s, delta: 0.2]
+  - platform: template
+    id: pumpe_durchfluss
+    name: Wasser Durchfluss
+    unit_of_measurement: L/min
+    device_class: volume_flow_rate
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - or: [throttle: 60s, delta: 0.5]
+  - platform: template
+    id: pumpe_liter_heute
+    name: Wasser heute (Pumpe)
+    unit_of_measurement: L
+    device_class: water
+    state_class: total_increasing
+    accuracy_decimals: 0
+    filters:
+      - delta: 1
+  - platform: template
+    id: pumpe_zaehler_a
+    name: Pumpe Zähler A
+    unit_of_measurement: L
+    device_class: water
+    state_class: total_increasing
+    accuracy_decimals: 1
+    filters:
+      - delta: 0.5
+  - platform: template
+    id: pumpe_zaehler_b
+    name: Pumpe Zähler B
+    unit_of_measurement: L
+    device_class: water
+    state_class: total_increasing
+    accuracy_decimals: 1
+    filters:
+      - delta: 0.5
+  - platform: template
+    id: pumpe_temperatur
+    name: Pumpe Temperatur
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+    filters:
+      - or: [throttle: 300s, delta: 1]
   - platform: ble_client
     type: rssi
     ble_client_id: pumpe
@@ -151,6 +258,10 @@ sensor:
     entity_category: diagnostic
 
 binary_sensor:
+  - platform: template
+    id: pumpe_laeuft
+    name: Pumpe läuft
+    device_class: running
   - platform: template
     name: Pumpe verbunden
     device_class: connectivity
@@ -187,6 +298,13 @@ debug:
   update_interval: 60s
 
 text_sensor:
+  # komplette Statusantwort als Hex – zum Entschlüsseln von Spannung, Strom, Druck, Durchfluss …
+  - platform: template
+    id: pumpe_roh
+    name: Pumpe Rohdaten
+    icon: mdi:code-brackets
+    entity_category: diagnostic
+    disabled_by_default: true
   - platform: debug
     reset_reason:
       name: Letzter Neustart-Grund
