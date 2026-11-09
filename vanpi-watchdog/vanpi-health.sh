@@ -1,12 +1,17 @@
 #!/bin/bash
-# VanPi health check: every 20 s check that a program can start and the SD card is writable.
-# After 4 consecutive failures (~80 s) reboot directly via the kernel (bash built-ins only,
-# works even when the SD card no longer delivers binaries). No action in the first 10 minutes
-# after boot (avoids a reboot loop with a truly dead card).
+# VanPi health check: every 20 s check that a program can start and the root filesystem is not
+# read-only (via /proc/mounts – no writes to the SD card). After 4 consecutive failures (~80 s)
+# reboot directly via the kernel (bash built-ins only, works even when the SD card no longer
+# delivers binaries). No action in the first 10 minutes after boot (avoids a reboot loop with a
+# truly dead card).
 fehler=0
 while true; do
   read -r up _ < /proc/uptime; up=${up%.*}
-  if /bin/true 2>/dev/null && /usr/bin/touch /var/tmp/.vanpi-health 2>/dev/null; then
+  ro=0
+  while read -r _ mnt _ opts _; do
+    [ "$mnt" = "/" ] && [[ ",$opts," == *",ro,"* ]] && ro=1
+  done < /proc/mounts
+  if /bin/true 2>/dev/null && [ "$ro" -eq 0 ]; then
     fehler=0
   else
     fehler=$((fehler+1))
