@@ -7,12 +7,13 @@ Erkenntnisse, Konfigurationen und Workarounds aus dem Smart-Home-Ausbau unseres 
 | Thema | Worum es geht |
 |---|---|
 | [CARAWATER ISP Bluetooth](carawater-isp-ble/) | Bluetooth-Protokoll der smarten Wasserpumpe CARAWATER ISP 10/15/20 entschlüsselt, ESP32-Bridge für Home Assistant (an/aus, 3 Druckstufen) |
-| [Pekaway + Webasto Sollwert](pekaway-webasto-setpoint/) | Ändern der Solltemperatur startet die Webasto Air Top Evo ungewollt – Ursache und Node-RED-Fix |
+| [Pekaway + Webasto Sollwert](pekaway-webasto-setpoint/) | Ändern der Solltemperatur startet die Webasto Air Top Evo ungewollt – Ursache und Node-RED-Fix; Modus live übernehmen, Merker an echten Zustand koppeln |
 | [VIOFO A329T in Home Assistant](viofo-a329t-homeassistant/) | Station-Modus geht nach jedem Neustart verloren – Lösung mit Hotspot und Raspberry Pi als Brücke, auch bei Tailscale-Subnetz-Überschneidung |
 | [SELFSAT / Teltonika GPS → MQTT](selfsat-rutc50-gps-mqtt/) | GPS des SELFSAT MWR 6550 (Teltonika RUTC50) per „Data to Server“ an Home Assistant, Wetter und Standort folgen dem Camper |
 | [M5Stack Dial als Camper-Fernbedienung](m5stack-dial-camper/) | ESPHome/LVGL-Drehknopf: Heizung, Klima, Licht, Wasser, Szenen, Nachtuhr, Warnring |
 | [Waveshare ESP32-P4 7" Panel](waveshare-esp32-p4-panel/) | ESPHome/LVGL-Touchpanel und die Stolperfallen (unsichtbare Schrift, Drehung, Touch) |
-| [VAN PI Watchdog](vanpi-watchdog/) | Selbstheilung, wenn die SD-Karte hängt und keine Relais mehr schalten |
+| [VAN PI Watchdog](vanpi-watchdog/) | Selbstheilung, wenn die SD-Karte hängt und keine Relais mehr schalten; wöchentliche Flow-Sicherung, Ausfallmeldung in HA |
+| [Energie-Dashboard mit SmartShunt](ha-energie-smartshunt/) | Landstrom und Akku im HA-Energie-Dashboard aus SmartShunt- und Ladegerät-Messwerten, Live-Energiefluss-Karte |
 
 Fragen, Fehler, Ergänzungen: gerne als Issue. Nutzung auf eigene Gefahr – siehe [Lizenz](LICENSE) (MIT).
 
@@ -26,11 +27,12 @@ Findings, configurations and workarounds from the smart-home build of our motorh
 | Topic | What it is about |
 |---|---|
 | [CARAWATER ISP Bluetooth](carawater-isp-ble/) | Reverse-engineered Bluetooth protocol of the CARAWATER ISP 10/15/20 smart water pump, ESP32 bridge for Home Assistant (on/off, 3 pressure levels) |
-| [Pekaway + Webasto setpoint](pekaway-webasto-setpoint/) | Changing the target temperature starts the Webasto Air Top Evo unintentionally – root cause and Node-RED fix |
+| [Pekaway + Webasto setpoint](pekaway-webasto-setpoint/) | Changing the target temperature starts the Webasto Air Top Evo unintentionally – root cause and Node-RED fix; apply mode while running, couple flag to real state |
 | [VIOFO A329T in Home Assistant](viofo-a329t-homeassistant/) | Station mode is lost after every reboot – solution with hotspot mode and a Raspberry Pi as bridge, also with Tailscale subnet overlap |
 | [SELFSAT / Teltonika GPS → MQTT](selfsat-rutc50-gps-mqtt/) | GPS of the SELFSAT MWR 6550 (Teltonika RUTC50) via "Data to Server" into Home Assistant; weather and location follow the camper |
 | [M5Stack Dial as camper remote](m5stack-dial-camper/) | ESPHome/LVGL rotary knob: heater, A/C, lights, water, scenes, night clock, warning ring |
 | [Waveshare ESP32-P4 7" panel](waveshare-esp32-p4-panel/) | ESPHome/LVGL touch panel and its pitfalls (invisible text, rotation, touch) |
-| [VAN PI watchdog](vanpi-watchdog/) | Self-healing when the SD card hangs and relays stop switching |
+| [VAN PI watchdog](vanpi-watchdog/) | Self-healing when the SD card hangs and relays stop switching; weekly flow backup, availability alert in HA |
+| [Energy dashboard with SmartShunt](ha-energie-smartshunt/) | Shore power and battery in the HA energy dashboard from SmartShunt and charger readings, live energy-flow card |
 
 Questions, bugs, additions: open an issue. Use at your own risk – see [license](LICENSE) (MIT).

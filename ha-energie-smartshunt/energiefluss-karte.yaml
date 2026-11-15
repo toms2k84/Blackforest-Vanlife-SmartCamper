@@ -1,0 +1,41 @@
+# Live-Energiefluss-Karte (custom:button-card, HACS). Entitäten anpassen.
+type: custom:button-card
+name: Energiefluss jetzt
+show_icon: false
+show_name: false
+show_state: false
+tap_action:
+  action: navigate
+  navigation_path: /energy/now
+triggers_update:
+  - sensor.solardach_pv_leistung
+  - sensor.solartasche_pv_leistung
+  - sensor.landstrom_lader_leistung
+  - sensor.akku_leistung_energiefluss
+  - sensor.smartshunt_xxxx_batterie
+styles:
+  card:
+    - border-radius: 16px
+    - padding: 10px
+  grid:
+    - grid-template-areas: '"f"'
+    - grid-template-columns: 1fr
+    - grid-template-rows: auto
+  custom_fields:
+    f:
+      - width: 100%
+custom_fields:
+  f: |
+    [[[
+    const n = id => { const v = Number(states[id] && states[id].state); return isNaN(v) ? 0 : v; };
+    const pv = n('sensor.solardach_pv_leistung') + n('sensor.solartasche_pv_leistung');
+    const grid = Math.max(n('sensor.landstrom_lader_leistung'), 0);
+    const bat = n('sensor.akku_leistung_energiefluss');
+    const load = Math.max(pv + grid + bat, 0);
+    const soc = n('sensor.smartshunt_xxxx_batterie');
+    const w = x => Math.abs(x) >= 1000 ? (Math.abs(x) / 1000).toLocaleString('de-DE', {maximumFractionDigits: 2}) + ' kW' : Math.round(Math.abs(x)) + ' W';
+    const box = (icon, label, val, sub, color, on) => '<div style="flex:1;min-width:0;text-align:center;padding:8px 4px;border-radius:12px;background:' + (on ? color + '22' : 'rgba(255,255,255,0.04)') + '"><ha-icon icon="' + icon + '" style="--mdc-icon-size:22px;color:' + (on ? color : 'var(--secondary-text-color)') + '"></ha-icon><div style="font-size:11.5px;opacity:.7">' + label + '</div><div style="font-size:17px;font-weight:700;color:' + (on ? color : 'inherit') + '">' + val + '</div><div style="font-size:11px;opacity:.7">' + sub + '</div></div>';
+    const arrow = on => '<div style="align-self:center;font-size:18px;opacity:' + (on ? 1 : 0.2) + '">→</div>';
+    const batSub = (bat < -5 ? 'lädt' : bat > 5 ? 'entlädt' : 'Ruhe') + ' · ' + Math.round(soc) + ' %';
+    return '<div style="display:flex;gap:6px;align-items:stretch;width:100%">' + box('mdi:solar-power', 'PV', w(pv), 'Dach+Tasche', '#f59e0b', pv > 5) + box('mdi:transmission-tower', 'Landstrom', w(grid), 'Ladegerät', '#3b82f6', grid > 5) + arrow(pv > 5 || grid > 5 || bat > 5) + box('mdi:battery-charging', 'Batterie', (bat < -5 ? '+' : bat > 5 ? '−' : '') + w(bat), batSub, '#22c55e', Math.abs(bat) > 5) + box('mdi:home-lightning-bolt', 'Verbrauch', w(load), 'Womo', '#e5e7eb', load > 5) + '</div>';
+    ]]]

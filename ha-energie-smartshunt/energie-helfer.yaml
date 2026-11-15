@@ -1,0 +1,64 @@
+# Energie-Helfer für das HA-Energie-Dashboard im Camper.
+# Wir haben sie in der UI als Template- und Integral-Helfer angelegt; das hier ist dieselbe Logik als YAML.
+# Entitäten anpassen: SmartShunt (Spannung/Strom, Strom positiv = Laden) und Landstrom-Ladegerät (IP22).
+
+template:
+  - sensor:
+      - name: "Akku Ladeleistung"
+        unique_id: akku_ladeleistung
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.smartshunt_xxxx_spannung') | float(0) * states('sensor.smartshunt_xxxx_stromstarke') | float(0) %}
+          {{ [p, 0] | max | round(1) }}
+        availability: "{{ has_value('sensor.smartshunt_xxxx_spannung') and has_value('sensor.smartshunt_xxxx_stromstarke') }}"
+      - name: "Akku Entladeleistung"
+        unique_id: akku_entladeleistung
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.smartshunt_xxxx_spannung') | float(0) * states('sensor.smartshunt_xxxx_stromstarke') | float(0) %}
+          {{ [-p, 0] | max | round(1) }}
+        availability: "{{ has_value('sensor.smartshunt_xxxx_spannung') and has_value('sensor.smartshunt_xxxx_stromstarke') }}"
+      - name: "Akku Leistung Energiefluss"
+        unique_id: akku_leistung_energiefluss
+        # Energie-Dashboard erwartet: positiv = Entladen
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ (-(states('sensor.smartshunt_xxxx_spannung') | float(0) * states('sensor.smartshunt_xxxx_stromstarke') | float(0))) | round(1) }}
+        availability: "{{ has_value('sensor.smartshunt_xxxx_spannung') and has_value('sensor.smartshunt_xxxx_stromstarke') }}"
+      - name: "Landstrom Lader Leistung"
+        unique_id: landstrom_lader_leistung
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ (states('sensor.ip22_xxxx_spannung') | float(0) * states('sensor.ip22_xxxx_stromstarke') | float(0)) | round(1) }}
+        availability: "{{ has_value('sensor.ip22_xxxx_spannung') and has_value('sensor.ip22_xxxx_stromstarke') }}"
+
+sensor:
+  - platform: integration
+    name: "Akku Ladeenergie"
+    unique_id: akku_ladeenergie
+    source: sensor.akku_ladeleistung
+    method: left
+    unit_prefix: k
+    round: 3
+  - platform: integration
+    name: "Akku Entladeenergie"
+    unique_id: akku_entladeenergie
+    source: sensor.akku_entladeleistung
+    method: left
+    unit_prefix: k
+    round: 3
+  - platform: integration
+    name: "Landstrom Energie"
+    unique_id: landstrom_energie
+    source: sensor.landstrom_lader_leistung
+    method: left
+    unit_prefix: k
+    round: 3

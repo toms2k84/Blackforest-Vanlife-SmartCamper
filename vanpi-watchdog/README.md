@@ -34,6 +34,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now vanpi-health.service
   Passt das Image nicht auf die neue Karte (gleiche Nenngröße, ein paar MB kleiner), lässt es sich am Mac mit `e2fsprogs` (`resize2fs`) und angepasster Partitionstabelle verkleinern.
 - **Schreiblast prüfen:** `a=$(awk '$3=="mmcblk0"{print $10}' /proc/diskstats); sleep 120; b=$(awk '$3=="mmcblk0"{print $10}' /proc/diskstats); echo $(( (b-a)/2 )) KB` zeigt, was in 2 min wirklich auf die Karte geht. Bei uns waren es 1,2 MB (~850 MB/Tag): Pekaways `~/.node-red/settings.js` enthält `flushIntervall: 3600` – ein Tippfehler (richtig: `flushInterval`). Dadurch schreibt Node-RED seine Kontextdateien alle 30 s statt stündlich. Korrektur: `sed -i 's/flushIntervall: 3600/flushInterval: 3600/' ~/.node-red/settings.js`, dann Node-RED neu starten.
 - **Ersatzkarte** mit dem Image im Fahrzeug liegen haben. Für Dauerbetrieb Marken-„High Endurance“-Karten verwenden.
+- **Flows wöchentlich sichern:** [`flow-backup.sh`](flow-backup.sh) kopiert `~/.node-red/flows_pekaway.json` (+ `_cred`) nach `~/flow-backups/` und behält 8 Stände. Cron: `15 4 * * 0 /home/pi/flow-backup.sh` (`crontab -e`). Vom Mac abholen: `scp pi@<vanpi>:flow-backups/flows-*.json .`
+- **Ausfall in Home Assistant sehen:** Ein Inject-Node (beim Start + alle 5 min) sendet `online` per MQTT mit **retain** an `pkw/stat/vanpi/availability`. Mit diesem Topic als `availability_topic` werden die VAN-PI-Entitäten in HA „nicht verfügbar“, wenn der Pi ausfällt (dafür im MQTT-Broker-Node zusätzlich eine Last-Will-Nachricht `offline` auf dasselbe Topic setzen). Eine HA-Automation meldet „länger als 5 min nicht verfügbar“ aufs Handy.
 
 ---
 
@@ -52,3 +54,5 @@ The stock SD card of the **VAN PI CORE PRO** suddenly threw `Input/output error`
 A first attempt with `Type=notify` + `systemd-notify` hung in "activating" and wouldn't have worked anyway, since `systemd-notify` is itself a binary.
 
 Also: log2ram is already active on the VAN PI; take a full image of the card (`dd … | gzip` over SSH, Node-RED may keep running); if the image doesn't fit a new card of the same nominal size, shrink it with `e2fsprogs` (`resize2fs`) and an adjusted partition table; check real SD writes via `/proc/diskstats` (ours: 1.2 MB per 2 min) – Pekaway's `settings.js` has the typo `flushIntervall: 3600` (should be `flushInterval`), so Node-RED rewrites its context files every 30 s instead of hourly; fix with `sed` as shown above; keep a spare card with the image in the vehicle; prefer brand-name "high endurance" cards.
+
+Weekly flow backup: [`flow-backup.sh`](flow-backup.sh) via cron `15 4 * * 0` (keeps 8 copies in `~/flow-backups/`). Availability: an inject node publishes `online` (retained) to `pkw/stat/vanpi/availability` at start and every 5 min; use it as `availability_topic` in HA (plus an `offline` last will on the broker node) and alert when entities stay unavailable for 5 min.

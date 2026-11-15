@@ -59,7 +59,7 @@ Byte 0–8 wie oben, danach Nullen bis Byte 58, Byte 59 = Summe aller vorherigen
 - Home Assistant: Schalter **„Wasserpumpe direkt“**, Auswahl **„Pumpe Druckstufe“** (1–3), **Spannung, Strom, Wasserdruck, Durchfluss, Liter heute, zwei Mengenzähler, Temperatur, „Pumpe läuft“** (gefiltert, max. 1×/min bzw. bei Änderung), Verbindungsstatus, Bluetooth-Signal, Neustart-Grund; Rohdaten-Sensor (Hex) standardmäßig deaktiviert
 - zusätzlich **Bluetooth-Proxy** für andere BLE-Geräte
 
-Anpassen: MAC-Adresse der Pumpe (`pumpe_mac`), WLAN in `secrets.yaml`, API-Schlüssel.
+Anpassen: MAC-Adresse der Pumpe (`pumpe_mac`), WLAN und API-Schlüssel (`api_encryption_key`) in der `secrets.yaml` des ESPHome Builders – so bleibt die YAML ohne Änderung flashbar.
 
 ## Stolperfallen
 
