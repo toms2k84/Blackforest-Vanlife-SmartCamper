@@ -28,6 +28,7 @@ api:
 
 ota:
   - platform: esphome
+    password: !secret ota_password
 
 wifi:
   ssid: !secret wifi_ssid
@@ -302,9 +303,7 @@ text_sensor:
   - platform: template
     id: pumpe_roh
     name: Pumpe Rohdaten
-    icon: mdi:code-brackets
-    entity_category: diagnostic
-    disabled_by_default: true
+    internal: true  # seit 15.11.2026: >255 Zeichen, HA kann es nicht speichern; Rohdaten stehen im ESPHome-Log
   - platform: debug
     reset_reason:
       name: Letzter Neustart-Grund
