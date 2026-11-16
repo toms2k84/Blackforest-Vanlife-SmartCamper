@@ -60,6 +60,13 @@ return null;
 
 **Auch umgekehrt koppeln:** Im **Eco**-Modus schaltet sich die Evo über dem Soll selbst ab (bei uns: Soll 24 °C, Fühler 26 °C) und kann später von selbst wieder anspringen. Dann steht der Merker auf `false` und Soll-/Modusänderungen werden ignoriert. Deshalb in derselben Node vor dem „Aus“-Teil: Läuft die Heizung **2 min am Stück** im „Regelbetrieb“, den Merker wieder auf `true` setzen (bei „Aus…“, „Nachlauf…“ oder „Abschaltung“ den Zähler zurücksetzen). Die 2 min verhindern, dass ein kurzes „Regelbetrieb“ direkt nach „Stopp“ zählt. Im Normal-Modus läuft die Evo über dem Soll auf kleiner Stufe weiter.
 
+## Eco: Neustart nach Selbstabschaltung (Home Assistant)
+
+Bei uns startete die Evo nach einer Eco-Selbstabschaltung **nicht** von allein wieder, auch nicht 1 K unter Soll bei fallender Raumtemperatur. Lösung in HA mit einem Helfer `input_boolean.webasto_eco_neustart` und zwei Automationen:
+
+1. **Scharf/aus:** MQTT-Trigger auf das Start/Stop-Topic des VAN PI (bei uns `vanpi/webasto/command`, Payload `START`/`STOP`). START → Helfer an, STOP (auch Ende des Laufzeit-Timers) oder ein Status mit „Verriegelung/Störung/Fehler“ → Helfer aus. Voraussetzung: **alle** Start-/Stopp-Wege laufen über dieses Topic.
+2. **Neustart:** Helfer an, Modus Eco, Status seit ≥ 10 min „Aus…“, Webasto-Fühler ≤ Soll − 1 K, Spannung > 12 V → `START` per `mqtt.publish` (nicht über ein Timer-Skript, damit eine laufende Laufzeit nicht neu beginnt). Kommt binnen 10 min kein „Regelbetrieb“, Helfer aus und Push.
+
 ## Wichtig: Deploy-Modus „Nur geänderte Nodes“
 
 Der Node-RED-Editor des VAN PI stand bei uns auf **„Vollständig“**. Dann startet **jedes** Deploy alle Flows neu – auch den Webasto-Flow, und eine laufende Heizung ging dabei aus. Im Deploy-Menü (Pfeil neben „Übernahme“) auf **„Nur geänderte Nodes“** umstellen.
@@ -108,6 +115,10 @@ The stock **"boost/eco"** function only stores the mode; the running heater gets
 ### Couple the flag to the real state
 
 If the Webasto shuts down **by itself**, `HeaterToggle_autoterm1` stays `true` and a later setpoint/mode change restarts it. A small function after the node that outputs the W-Bus state text resets the flag after 3 minutes of an "Aus…" (off) state (code above). Couple it the other way too: in **Eco** mode the Evo shuts itself down above the setpoint and may restart on its own, so set the flag back to `true` after **2 minutes** of continuous "Regelbetrieb" (controlled operation); reset that counter on "Aus…", "Nachlauf…" or "Abschaltung" so a brief "Regelbetrieb" right after a stop doesn't count. In Normal mode the Evo keeps running at low power above the setpoint.
+
+### Eco: restart after self-shutdown (Home Assistant)
+
+Ours did **not** restart by itself after an Eco self-shutdown, not even 1 K below the setpoint. Fix in HA: a helper `input_boolean.webasto_eco_neustart`, armed by `START` and disarmed by `STOP` (or a lockout/fault state) on the VAN PI command topic (ours: `vanpi/webasto/command`; all start/stop paths must use it). A second automation sends `START` via `mqtt.publish` when the helper is on, mode is Eco, the state has been "Aus…" for ≥ 10 min, the heater sensor is ≤ setpoint − 1 K and voltage > 12 V; if "Regelbetrieb" doesn't follow within 10 min it disarms and notifies.
 
 ### Deploy mode "Modified nodes"
 
