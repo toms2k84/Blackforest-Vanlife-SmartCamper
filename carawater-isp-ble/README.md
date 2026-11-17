@@ -57,7 +57,7 @@ Byte 0–8 wie oben, danach Nullen bis Byte 58, Byte 59 = Summe aller vorherigen
 [`carawater-bridge.yaml`](carawater-bridge.yaml) für einen normalen **ESP32** (getestet mit ESP32-D0WD-V3, 4 MB):
 - `ble_client` zur Pumpe, Statusabfrage alle 10 s
 - Home Assistant: Schalter **„Wasserpumpe direkt“**, Auswahl **„Pumpe Druckstufe“** (1–3), **Spannung, Strom, Wasserdruck, Durchfluss, Liter heute, zwei Mengenzähler, Temperatur, „Pumpe läuft“** (gefiltert, max. 1×/min bzw. bei Änderung), Verbindungsstatus, Bluetooth-Signal, Neustart-Grund; Rohdaten-Sensor (Hex) standardmäßig deaktiviert
-- zusätzlich **Bluetooth-Proxy** für andere BLE-Geräte
+- **kein** Bluetooth-Proxy und passiver Scan: Mit Proxy und aktivem Scan hatte unsere Bridge trotz gutem WLAN (−50 dBm) rund 85 kurze Verbindungsabbrüche zu HA am Tag – der ESP32 teilt sich einen Funkchip für WLAN und Bluetooth. Andere BLE-Geräte (z. B. Victron) empfängt besser der HA-Rechner selbst.
 
 Anpassen: MAC-Adresse der Pumpe (`pumpe_mac`), WLAN und API-Schlüssel (`api_encryption_key`) in der `secrets.yaml` des ESPHome Builders – so bleibt die YAML ohne Änderung flashbar.
 
@@ -100,7 +100,7 @@ The pump advertises as `ISP_xx_xxxx`, service **`FF00`** ("BLE UART"):
 
 ### ESPHome bridge
 
-[`carawater-bridge.yaml`](carawater-bridge.yaml) for a plain **ESP32**: `ble_client` to the pump, status poll every 10 s; Home Assistant gets a **switch**, a **pressure select** (1–3), **voltage, current, water pressure, flow, litres today, two volume counters, temperature, running state**, connection status, BLE RSSI, reset reason; plus a **Bluetooth proxy**. Adjust the pump MAC (`pumpe_mac`), Wi-Fi in `secrets.yaml` and the API key.
+[`carawater-bridge.yaml`](carawater-bridge.yaml) for a plain **ESP32**: `ble_client` to the pump, status poll every 10 s; Home Assistant gets a **switch**, a **pressure select** (1–3), **voltage, current, water pressure, flow, litres today, two volume counters, temperature, running state**, connection status, BLE RSSI, reset reason. **No Bluetooth proxy** and passive scanning on purpose: with proxy + active scan our bridge dropped its HA connection ~85 times a day despite good Wi-Fi (−50 dBm) – WLAN and BLE share one radio on the ESP32. Adjust the pump MAC (`pumpe_mac`), Wi-Fi in `secrets.yaml` and the API key.
 
 ### Pitfalls
 
